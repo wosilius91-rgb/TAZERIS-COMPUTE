@@ -4,19 +4,63 @@ set -euo pipefail
 PROMPT_FILE="${1:-prompt.txt}"
 RESULT_FILE="${2:-result.txt}"
 
-rm -rf /tmp/llama.cpp /tmp/models
-git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
+rm -rf /tmp/llama-bin /tmp/models /tmp/llama.tar.gz
+mkdir -p /tmp/llama-bin /tmp/models
 
-cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLAMA_BUILD_TOOLS=ON \
-  -DLLAMA_BUILD_SERVER=OFF \
-  -DLLAMA_BUILD_TESTS=OFF \
-  -DLLAMA_BUILD_EXAMPLES=OFF
+echo "=== FIND LATEST LLAMA UBUNTU X64 ==="
 
-cmake --build /tmp/llama.cpp/build --target llama-cli -j4
+LLAMA_URL="$(
+python3 - <<'PY'
+import json, urllib.request
 
-mkdir -p /tmp/models
+req=urllib.request.Request(
+    "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest",
+    headers={
+        "Accept":"application/vnd.github+json",
+        "User-Agent":"TAZERIS-COMPUTE"
+    }
+)
+
+with urllib.request.urlopen(req, timeout=30) as r:
+    d=json.load(r)
+
+assets=d.get("assets",[])
+
+matches=[
+    a["browser_download_url"]
+    for a in assets
+    if a.get("name","").endswith("bin-ubuntu-x64.tar.gz")
+]
+
+if not matches:
+    raise SystemExit("STOP: Ubuntu x64 llama binary asset nerastas")
+
+print(matches[0])
+PY
+)"
+
+echo "$LLAMA_URL"
+
+curl -L --fail --retry 3 \
+  -o /tmp/llama.tar.gz \
+  "$LLAMA_URL"
+
+tar -xzf /tmp/llama.tar.gz -C /tmp/llama-bin
+
+LLAMA_CLI="$(find /tmp/llama-bin -type f -name llama-cli | head -1)"
+
+[ -n "$LLAMA_CLI" ] || {
+  echo "STOP: llama-cli nerastas pakete"
+  find /tmp/llama-bin -maxdepth 3 -type f | head -100
+  exit 1
+}
+
+chmod +x "$LLAMA_CLI"
+
+echo "=== LLAMA CLI ==="
+"$LLAMA_CLI" --version
+
+echo "=== MODEL ==="
 
 curl -L --fail --retry 3 \
   -o /tmp/models/qwen.gguf \
@@ -24,13 +68,17 @@ curl -L --fail --retry 3 \
 
 PROMPT="$(cat "$PROMPT_FILE")"
 
-/tmp/llama.cpp/build/bin/llama-cli \
+echo "=== COMPUTE ==="
+
+"$LLAMA_CLI" \
   -m /tmp/models/qwen.gguf \
   -t 4 \
   -c 4096 \
-  -n 1400 \
+  -n 400 \
   --temp 0 \
   -p "$PROMPT" \
   > "$RESULT_FILE"
 
 test -s "$RESULT_FILE"
+
+echo "TAZERIS REMOTE COMPUTE: OK"
