@@ -84,7 +84,7 @@ echo "=== COMPUTE ==="
   -m /tmp/models/qwen.gguf \
   -t 4 \
   -c 4096 \
-  -n 400 \
+  -n 1000 \
   --temp 0 \
   --single-turn \
   -p "$PROMPT" \
