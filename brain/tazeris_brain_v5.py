@@ -535,7 +535,9 @@ def failed_log(run_id):
             if re.search(
                 r"error:|unresolved reference|execution failed|"
                 r"compilation error|resource linking failed|"
-                r"failed with an exception",
+                r"failed with an exception|what went wrong|"
+                r"plugin .* was not found|could not resolve|"
+                r"could not find|build file .* line:",
                 line,
                 re.I
             ):
