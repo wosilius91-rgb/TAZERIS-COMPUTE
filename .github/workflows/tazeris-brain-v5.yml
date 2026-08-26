@@ -2,6 +2,8 @@ name: TAZERIS Brain V5
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "7 */5 * * *"
 
 permissions:
   contents: read
@@ -18,9 +20,18 @@ jobs:
 
     env:
       GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
+      TAZERIS_MAX_RUNTIME_SECONDS: "18000"
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore Brain state
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.tazeris
+          key: tazeris-v5-state-${{ github.run_id }}
+          restore-keys: |
+            tazeris-v5-state-
 
       - name: Verify secret
         run: |
@@ -35,3 +46,10 @@ jobs:
       - name: Run TAZERIS Brain V5
         run: |
           python -u brain/tazeris_brain_v5.py
+
+      - name: Save Brain state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.tazeris
+          key: tazeris-v5-state-${{ github.run_id }}

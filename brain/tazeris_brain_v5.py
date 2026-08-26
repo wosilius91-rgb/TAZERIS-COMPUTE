@@ -627,6 +627,9 @@ def main():
     if not GH:
         raise SystemExit("STOP: GH_TOKEN NERA")
 
+    started=time.time()
+    max_runtime=int(os.environ.get("TAZERIS_MAX_RUNTIME_SECONDS","0") or 0)
+
     print("TAZERIS V5 FAST ATOMIC STARTED",flush=True)
     print(
         "OPENAI OFF | LOCAL QWEN ON | "
@@ -638,6 +641,11 @@ def main():
 
     while True:
         try:
+            if max_runtime and time.time()-started >= max_runtime:
+                state_save(st)
+                print("GRACEFUL_RESTART cycles",st["cycles"],flush=True)
+                break
+
             st["cycles"]+=1
 
             task=next_task(st)
