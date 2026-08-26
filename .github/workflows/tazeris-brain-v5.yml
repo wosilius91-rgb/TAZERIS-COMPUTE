@@ -1,0 +1,37 @@
+name: TAZERIS Brain V5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: tazeris-brain-v5
+  cancel-in-progress: false
+
+jobs:
+  brain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    env:
+      GH_TOKEN: ${{ secrets.FACTORY_GH_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify secret
+        run: |
+          test -n "$GH_TOKEN"
+          echo "GH TOKEN: OK"
+
+      - name: Verify Brain
+        run: |
+          python -m py_compile brain/tazeris_brain_v5.py
+          echo "BRAIN PYTHON: OK"
+
+      - name: Run TAZERIS Brain V5
+        run: |
+          python -u brain/tazeris_brain_v5.py
