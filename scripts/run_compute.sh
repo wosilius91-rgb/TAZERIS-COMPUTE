@@ -10,33 +10,43 @@ mkdir -p /tmp/llama-bin /tmp/models
 echo "=== FIND LATEST LLAMA UBUNTU X64 ==="
 
 LLAMA_URL="$(
-python3 - <<'PY'
+python3 - <<'PY2'
 import json, urllib.request
 
-req=urllib.request.Request(
-    "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest",
-    headers={
-        "Accept":"application/vnd.github+json",
-        "User-Agent":"TAZERIS-COMPUTE"
-    }
-)
+headers={
+    "Accept":"application/vnd.github+json",
+    "User-Agent":"TAZERIS-COMPUTE"
+}
 
-with urllib.request.urlopen(req, timeout=30) as r:
-    d=json.load(r)
+found=None
 
-assets=d.get("assets",[])
+for page in range(1,6):
+    req=urllib.request.Request(
+        f"https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20&page={page}",
+        headers=headers
+    )
 
-matches=[
-    a["browser_download_url"]
-    for a in assets
-    if a.get("name","").endswith("bin-ubuntu-x64.tar.gz")
-]
+    with urllib.request.urlopen(req, timeout=30) as r:
+        releases=json.load(r)
 
-if not matches:
-    raise SystemExit("STOP: Ubuntu x64 llama binary asset nerastas")
+    for rel in releases:
+        for a in rel.get("assets",[]):
+            name=a.get("name","")
 
-print(matches[0])
-PY
+            if (
+                name.startswith("llama-")
+                and name.endswith("-bin-ubuntu-x64.tar.gz")
+                and "openvino" not in name
+                and "sycl" not in name
+                and "vulkan" not in name
+                and "rocm" not in name
+            ):
+                found=a["browser_download_url"]
+                print(found)
+                raise SystemExit(0)
+
+raise SystemExit("STOP: Ubuntu x64 CPU llama binary nerastas")
+PY2
 )"
 
 echo "$LLAMA_URL"
