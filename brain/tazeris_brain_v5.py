@@ -560,7 +560,14 @@ def repair(task,log):
     ]
 
     if not mentioned:
-        mentioned=task["files"]
+        mentioned=list(task["files"])
+    else:
+        mentioned=list(mentioned)
+
+    if re.search(r"mlkit|com\.google\.mlkit",log,re.I):
+        gradle="app/build.gradle.kts"
+        if gradle not in mentioned:
+            mentioned.append(gradle)
 
     context=bundle(mentioned,3500)
 
