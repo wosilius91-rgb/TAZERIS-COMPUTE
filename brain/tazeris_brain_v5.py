@@ -402,8 +402,16 @@ def parse_files(raw,allowed):
     )
 
     for path,content in matches:
-        if path in allowed and content.strip():
-            out[path]=content.strip()
+        normalized=next(
+            (
+                a for a in allowed
+                if path == a or path.endswith("/"+a)
+            ),
+            None
+        )
+
+        if normalized and content.strip():
+            out[normalized]=content.strip()
 
     return out
 
