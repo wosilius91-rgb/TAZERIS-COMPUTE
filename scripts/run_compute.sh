@@ -86,6 +86,7 @@ echo "=== COMPUTE ==="
   -c 4096 \
   -n 400 \
   --temp 0 \
+  --single-turn \
   -p "$PROMPT" \
   > "$RESULT_FILE"
 
