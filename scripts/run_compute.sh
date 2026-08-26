@@ -4,12 +4,16 @@ set -euo pipefail
 PROMPT_FILE="${1:-prompt.txt}"
 RESULT_FILE="${2:-result.txt}"
 
+rm -rf /tmp/llama.cpp /tmp/models
 git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
+
 cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
   -DCMAKE_BUILD_TYPE=Release \
+  -DLLAMA_BUILD_TOOLS=ON \
   -DLLAMA_BUILD_SERVER=OFF \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF
+
 cmake --build /tmp/llama.cpp/build --target llama-cli -j4
 
 mkdir -p /tmp/models
