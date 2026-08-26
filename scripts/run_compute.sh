@@ -83,8 +83,8 @@ echo "=== COMPUTE ==="
 "$LLAMA_CLI" \
   -m /tmp/models/qwen.gguf \
   -t 4 \
-  -c 4096 \
-  -n 1000 \
+  -c 8192 \
+  -n 1800 \
   --temp 0 \
   --single-turn \
   -p "$PROMPT" \
