@@ -3,6 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:label="TAZERIS Video Dirbtuvė"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
