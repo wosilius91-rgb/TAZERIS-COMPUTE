@@ -1,7 +1,9 @@
 package com.tazeris.streamworkshop;
 
 import android.app.Activity;
-import android.content.Intent;
+import android.content.*;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -13,13 +15,6 @@ import android.graphics.Typeface;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-import com.yausername.youtubedl_android.YoutubeDL;
-import com.yausername.youtubedl_android.YoutubeDLException;
-import com.yausername.youtubedl_android.YoutubeDLRequest;
-import com.yausername.ffmpeg.FFmpeg;
-import kotlin.Unit;
-import kotlin.jvm.functions.Function3;
-
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -38,41 +33,20 @@ public class MainActivity extends Activity {
     private LinearLayout results;
     private volatile boolean busy = false;
     private volatile boolean ytDlpReady = false;
+    private boolean receiverRegistered=false;
+    private final BroadcastReceiver workerReceiver=new BroadcastReceiver(){
+        @Override public void onReceive(Context context,Intent intent){ syncFromWorkerState(); }
+    };
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         setContentView(buildUi());
-        setBusy(true);
-        executor.execute(() -> {
-            try {
-                progress("VARIKLIO PARUOŠIMAS",1,"Ruošiamas telefono video variklis…","yt-dlp + FFmpeg");
-                YoutubeDL.getInstance().init(this);
-                FFmpeg.getInstance().init(this);
-                String before=String.valueOf(YoutubeDL.getInstance().versionName(this));
-                progress("VARIKLIO ATNAUJINIMAS",2,"Atnaujinamas yt-dlp…","Dabartinė versija: "+before);
-                try {
-                    YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel._NIGHTLY);
-                } catch(Exception updateError) {
-                    telemetry("ytdlp_update_warning","NIGHTLY atnaujinimas nepavyko",cleanError(updateError));
-                    try {
-                        YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel._STABLE);
-                    } catch(Exception stableError) {
-                        telemetry("ytdlp_update_warning","STABLE atnaujinimas nepavyko",cleanError(stableError));
-                    }
-                }
-                String after=String.valueOf(YoutubeDL.getInstance().versionName(this));
-                ytDlpReady = true;
-                JSONObject h=json(API+"/health","GET",null);
-                telemetry("app_start","Dirbtuvė paleista","yt-dlp "+after+" • V2 "+h.optString("version","?"));
-                setBusy(false);
-                progress("PARUOŠTA",0,"Dirbtuvė paruošta","yt-dlp "+after+" + V2 serveris pasiekiami");
-            } catch(Exception e) {
-                telemetry("startup_error","Variklio paleidimas nepavyko",cleanError(e));
-                setBusy(false);
-                progress("VARIKLIO KLAIDA",100,"Telefono video variklis nepasileido",cleanError(e));
-            }
-        });
+        if(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},2001);
+        }
+        syncFromWorkerState();
     }
+
 
     private View buildUi() {
         int pad = dp(16);
@@ -87,12 +61,12 @@ public class MainActivity extends Activity {
         root.addView(brand);
         TextView title = text("Stream → profesionalūs Shorts", 30, Color.WHITE, true);
         title.setPadding(0, dp(8), 0, dp(12)); root.addView(title);
-        root.addView(text("Nuoroda arba failas. Atsisiuntimas vyksta telefonu, AI analizė ir montažas — serveryje.",14,Color.rgb(166,177,194),false));
+        root.addView(text("Nuoroda arba failas. Nuorodos užduotis veikia fone — gali uždaryti dirbtuvę ir naudoti telefoną kitur.",14,Color.rgb(166,177,194),false));
 
         LinearLayout card = card(); root.addView(card, lpMatch());
         label(card,"Streamo nuoroda");
         urlInput = input("https://youtube.com/live/…"); card.addView(urlInput, lpMatch());
-        linkButton = button("SUKURTI IŠ NUORODOS"); card.addView(linkButton, lpMatch());
+        linkButton = button("PALEISTI KŪRIMĄ FONE"); card.addView(linkButton, lpMatch());
         linkButton.setOnClickListener(v -> startLink());
 
         fileButton = button("PASIRINKTI VIDEO FAILĄ"); card.addView(fileButton, lpMatch());
@@ -145,70 +119,59 @@ public class MainActivity extends Activity {
     private String cleanError(Throwable e){String s=e.getMessage();return (s==null||s.isBlank())?e.getClass().getSimpleName():s;}
 
     private void startLink(){
-        if(busy)return;
         String url=urlInput.getText().toString().trim();
         if(url.isEmpty()){urlInput.requestFocus();return;}
-        if(!ytDlpReady){progress("VARIKLIO KLAIDA",100,"yt-dlp dar neparuoštas","Perkrauk dirbtuvę");return;}
-        setBusy(true); results.removeAllViews();
-        executor.execute(()->{
-            try{
-                telemetry("link_start","Pradėtas yt-dlp atsisiuntimas",url);
-                progress("Nuorodos analizė",2,"yt-dlp analizuoja streamą…","Naudojamas tavo telefono internetas");
-                File dir=new File(getExternalFilesDir(null),"stream-workshop");
-                if(!dir.exists()&&!dir.mkdirs())throw new IOException("Nepavyko sukurti darbo aplanko");
-                clearDir(dir);
+        SharedPreferences p=getSharedPreferences("worker_state",MODE_PRIVATE);
+        if("running".equals(p.getString("status",""))){
+            syncFromWorkerState();
+            return;
+        }
+        results.removeAllViews();
+        Intent s=new Intent(this,StreamWorkerService.class);
+        s.setAction(StreamWorkerService.ACTION_START_LINK);
+        s.putExtra("url",url);
+        s.putExtra("tiktok",tiktokInput.getText().toString());
+        s.putExtra("youtube",youtubeInput.getText().toString());
+        s.putExtra("discord",discordInput.getText().toString());
+        startForegroundService(s);
+        p.edit().putString("status","running").putString("stage","PALEIDŽIAMA")
+                .putInt("progress",0).putString("message","Užduotis perduota foniniam servisui")
+                .putString("detail","Gali uždaryti dirbtuvę ir dirbti kitus darbus.").apply();
+        syncFromWorkerState();
+    }
 
-                String template=new File(dir,"source.%(ext)s").getAbsolutePath();
+    private void syncFromWorkerState(){
+        SharedPreferences p=getSharedPreferences("worker_state",MODE_PRIVATE);
+        String st=p.getString("status","idle");
+        String stage=p.getString("stage","PARUOŠTA");
+        int pct=p.getInt("progress",0);
+        String msg=p.getString("message","Įklijuok nuorodą arba pasirink failą");
+        String detail=p.getString("detail","");
+        if("running".equals(st)){
+            setBusy(true);progress(stage,pct,msg,detail);
+        }else if("done".equals(st)){
+            setBusy(false);progress("BAIGTA",100,msg,detail);
+            String clips=p.getString("clips","[]");
+            try{showResults(new JSONArray(clips));}catch(Exception ignored){}
+        }else if("error".equals(st)){
+            setBusy(false);progress(stage,100,msg,detail);
+        }else{
+            setBusy(false);progress("PARUOŠTA",0,"Įklijuok nuorodą arba pasirink failą","Foninis režimas paruoštas");
+        }
+    }
 
-                Function3<Float,Long,String,Unit> cb=(p,eta,line)->{
-                    int pct=Math.max(0,Math.min(100,Math.round(p)));
-                    int appPct=3+(int)(pct*0.44);
-                    String det=(eta!=null&&eta>0)?("Liko ~"+eta+" s"):"";
-                    progress("Atsisiuntimas telefone",appPct,"Siunčiamas streamas… "+pct+"%",det);
-                    return Unit.INSTANCE;
-                };
+    @Override protected void onStart(){
+        super.onStart();
+        if(!receiverRegistered){
+            registerReceiver(workerReceiver,new IntentFilter(StreamWorkerService.ACTION_PROGRESS),RECEIVER_NOT_EXPORTED);
+            receiverRegistered=true;
+        }
+        syncFromWorkerState();
+    }
 
-                String[] clients={"","tv_simply","android_vr","web_safari"};
-                Exception lastError=null;
-                boolean downloaded=false;
-                for(int attempt=0;attempt<clients.length&&!downloaded;attempt++){
-                    for(File old:Objects.requireNonNullElse(dir.listFiles(),new File[0])) {
-                        if(old.getName().startsWith("source.")) old.delete();
-                    }
-                    String client=clients[attempt];
-                    progress("Nuorodos analizė",2+attempt,"YouTube gavimo būdas "+(attempt+1)+"/"+clients.length+"…",client.isEmpty()?"default":client);
-                    telemetry("ytdlp_attempt","YouTube gavimo būdas "+(attempt+1),client.isEmpty()?"default":client);
-                    try{
-                        YoutubeDLRequest request=new YoutubeDLRequest(url);
-                        request.addOption("--no-playlist");
-                        request.addOption("--no-mtime");
-                        request.addOption("--merge-output-format","mp4");
-                        request.addOption("--remote-components","ejs:github");
-                        request.addOption("-f","bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]");
-                        request.addOption("-o",template);
-                        request.addOption("--retries","5");
-                        request.addOption("--fragment-retries","5");
-                        request.addOption("--socket-timeout","30");
-                        if(!client.isEmpty()) request.addOption("--extractor-args","youtube:player_client="+client);
-                        YoutubeDL.getInstance().execute(request,"TAZERIS_STREAM_"+attempt,cb);
-                        downloaded=true;
-                    }catch(Exception e){
-                        lastError=e;
-                        telemetry("ytdlp_attempt_error","Būdas "+(attempt+1)+" nepavyko",cleanError(e));
-                    }
-                }
-                if(!downloaded) throw lastError!=null?lastError:new IOException("Nepavyko gauti YouTube video");
-
-                File[] files=dir.listFiles((d,n)->n.startsWith("source.")&&!n.endsWith(".part")&&!n.endsWith(".ytdl"));
-                if(files==null||files.length==0)throw new IOException("yt-dlp baigė darbą, bet video failas nerastas");
-                File video=files[0];
-                for(File f:files)if(f.length()>video.length())video=f;
-                if(video.length()<1024*1024)throw new IOException("Parsisiųstas video failas per mažas");
-                telemetry("link_resolved","yt-dlp video gautas",video.getName()+" • "+mb(video.length()));
-                progress("Atsisiuntimas baigtas",48,"Streamo įrašas gautas telefone",mb(video.length()));
-                uploadPair(video,null);
-            }catch(Exception e){fail(e);}
-        });
+    @Override protected void onStop(){
+        if(receiverRegistered){unregisterReceiver(workerReceiver);receiverRegistered=false;}
+        super.onStop();
     }
 
     private void uploadPair(File video,File audio)throws Exception{
