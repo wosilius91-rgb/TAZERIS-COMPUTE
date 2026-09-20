@@ -1,0 +1,36 @@
+name: TAZERIS Phone Bridge Smoke
+
+on:
+  push:
+    paths:
+      - '.github/workflows/phone-bridge-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check V2 health
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS https://tazeris-stream-clipper-v2-production.up.railway.app/health | tee /tmp/health.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/health.json'))
+          assert d.get('ok') is True, d
+          print(d)
+          PY
+
+      - name: Check setup page
+        run: |
+          curl --fail-with-body -sS https://tazeris-stream-clipper-v2-production.up.railway.app/phone-setup | grep -q "TAZERIS telefono bridge"
+
+      - name: Download and compile phone bridge
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS https://tazeris-stream-clipper-v2-production.up.railway.app/phone-helper.py -o /tmp/tazeris_phone_bridge.py
+          test -s /tmp/tazeris_phone_bridge.py
+          python -m py_compile /tmp/tazeris_phone_bridge.py
+          grep -q "TAZERIS Phone Bridge" /tmp/tazeris_phone_bridge.py
+          echo "PHONE_BRIDGE_SMOKE=PASS"
