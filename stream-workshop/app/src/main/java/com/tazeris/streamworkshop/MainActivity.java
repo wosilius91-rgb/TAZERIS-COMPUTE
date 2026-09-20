@@ -2,13 +2,11 @@ package com.tazeris.streamworkshop;
 
 import android.app.Activity;
 import android.Manifest;
+import android.content.*;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.content.*;
-import android.Manifest;
-import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -39,10 +37,6 @@ public class MainActivity extends Activity {
     private volatile boolean busy = false;
     private final Handler stateHandler=new Handler(Looper.getMainLooper());
     private boolean watching=false;
-    private boolean receiverRegistered=false;
-    private final BroadcastReceiver workerReceiver=new BroadcastReceiver(){
-        @Override public void onReceive(Context context,Intent intent){ syncFromWorkerState(); }
-    };
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
