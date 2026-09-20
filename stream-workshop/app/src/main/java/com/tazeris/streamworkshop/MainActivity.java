@@ -1,6 +1,11 @@
 package com.tazeris.streamworkshop;
 
 import android.app.Activity;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.*;
 import android.Manifest;
 import android.content.pm.PackageManager;
@@ -32,7 +37,8 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private LinearLayout results;
     private volatile boolean busy = false;
-    private volatile boolean ytDlpReady = false;
+    private final Handler stateHandler=new Handler(Looper.getMainLooper());
+    private boolean watching=false;
     private boolean receiverRegistered=false;
     private final BroadcastReceiver workerReceiver=new BroadcastReceiver(){
         @Override public void onReceive(Context context,Intent intent){ syncFromWorkerState(); }
@@ -41,12 +47,19 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         setContentView(buildUi());
-        if(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},2001);
+        if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},77);
         }
-        syncFromWorkerState();
+        executor.execute(() -> {
+            try {
+                JSONObject h=json(API+"/health","GET",null);
+                progress("PARUOŠTA",0,"Dirbtuvė paruošta","V2 "+h.optString("version","?")+" • foninis režimas įjungtas");
+            } catch(Exception e) {
+                progress("RYŠIO KLAIDA",0,"V2 serverio pasiekti nepavyko",cleanError(e));
+            }
+        });
+        startStateWatcher();
     }
-
 
     private View buildUi() {
         int pad = dp(16);
@@ -119,59 +132,19 @@ public class MainActivity extends Activity {
     private String cleanError(Throwable e){String s=e.getMessage();return (s==null||s.isBlank())?e.getClass().getSimpleName():s;}
 
     private void startLink(){
+        if(busy)return;
         String url=urlInput.getText().toString().trim();
         if(url.isEmpty()){urlInput.requestFocus();return;}
-        SharedPreferences p=getSharedPreferences("worker_state",MODE_PRIVATE);
-        if("running".equals(p.getString("status",""))){
-            syncFromWorkerState();
-            return;
-        }
         results.removeAllViews();
-        Intent s=new Intent(this,StreamWorkerService.class);
-        s.setAction(StreamWorkerService.ACTION_START_LINK);
-        s.putExtra("url",url);
-        s.putExtra("tiktok",tiktokInput.getText().toString());
-        s.putExtra("youtube",youtubeInput.getText().toString());
-        s.putExtra("discord",discordInput.getText().toString());
-        startForegroundService(s);
-        p.edit().putString("status","running").putString("stage","PALEIDŽIAMA")
-                .putInt("progress",0).putString("message","Užduotis perduota foniniam servisui")
-                .putString("detail","Gali uždaryti dirbtuvę ir dirbti kitus darbus.").apply();
-        syncFromWorkerState();
-    }
-
-    private void syncFromWorkerState(){
-        SharedPreferences p=getSharedPreferences("worker_state",MODE_PRIVATE);
-        String st=p.getString("status","idle");
-        String stage=p.getString("stage","PARUOŠTA");
-        int pct=p.getInt("progress",0);
-        String msg=p.getString("message","Įklijuok nuorodą arba pasirink failą");
-        String detail=p.getString("detail","");
-        if("running".equals(st)){
-            setBusy(true);progress(stage,pct,msg,detail);
-        }else if("done".equals(st)){
-            setBusy(false);progress("BAIGTA",100,msg,detail);
-            String clips=p.getString("clips","[]");
-            try{showResults(new JSONArray(clips));}catch(Exception ignored){}
-        }else if("error".equals(st)){
-            setBusy(false);progress(stage,100,msg,detail);
-        }else{
-            setBusy(false);progress("PARUOŠTA",0,"Įklijuok nuorodą arba pasirink failą","Foninis režimas paruoštas");
-        }
-    }
-
-    @Override protected void onStart(){
-        super.onStart();
-        if(!receiverRegistered){
-            registerReceiver(workerReceiver,new IntentFilter(StreamWorkerService.ACTION_PROGRESS),RECEIVER_NOT_EXPORTED);
-            receiverRegistered=true;
-        }
-        syncFromWorkerState();
-    }
-
-    @Override protected void onStop(){
-        if(receiverRegistered){unregisterReceiver(workerReceiver);receiverRegistered=false;}
-        super.onStop();
+        Intent svc=new Intent(this,StreamWorkService.class);
+        svc.putExtra("url",url);
+        svc.putExtra("tiktok",tiktokInput.getText().toString());
+        svc.putExtra("youtube",youtubeInput.getText().toString());
+        svc.putExtra("discord",discordInput.getText().toString());
+        if(Build.VERSION.SDK_INT>=26)startForegroundService(svc);else startService(svc);
+        setBusy(true);
+        progress("PALEISTA",1,"Darbas perduotas fonui","Gali užgesinti ekraną arba naudoti kitas programas");
+        startStateWatcher();
     }
 
     private void uploadPair(File video,File audio)throws Exception{
@@ -229,6 +202,40 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void startStateWatcher(){
+        if(watching)return;watching=true;
+        stateHandler.post(new Runnable(){
+            @Override public void run(){
+                if(!watching)return;
+                try{
+                    SharedPreferences p=getSharedPreferences(StreamWorkService.PREFS,MODE_PRIVATE);
+                    String st=p.getString("status","");
+                    if(!st.isEmpty()){
+                        String stage=p.getString("stage","VEIKIA");
+                        int pct=p.getInt("progress",0);
+                        String msg=p.getString("message","Apdorojama…");
+                        String detail=p.getString("detail","");
+                        progress(stage,pct,msg,detail);
+                        boolean active="running".equals(st)||"downloading".equals(st)||"uploading".equals(st)||"processing".equals(st);
+                        setBusy(active);
+                        if("done".equals(st)){
+                            String raw=p.getString("results","[]");
+                            try{showResults(new JSONArray(raw));}catch(Exception ignored){}
+                        }
+                    }
+                }catch(Exception ignored){}
+                stateHandler.postDelayed(this,1000);
+            }
+        });
+    }
+
+    @Override protected void onResume(){
+        super.onResume();watching=false;startStateWatcher();
+    }
+    @Override protected void onPause(){
+        watching=false;stateHandler.removeCallbacksAndMessages(null);super.onPause();
+    }
+
     private void pickFile(){
         if(busy)return;
         Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("video/*");i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -251,7 +258,7 @@ public class MainActivity extends Activity {
     private void telemetry(String event,String message,String detail){
         try{
             JSONObject x=new JSONObject();
-            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.3.0-resumable-upload");
+            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.4.0-background-ui");
             json(API+"/api/mobile/event","POST",x.toString());
         }catch(Exception ignored){}
     }
@@ -297,5 +304,5 @@ public class MainActivity extends Activity {
 
     private static final String UA="Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 Chrome/153 Safari/537.36";
 
-    @Override protected void onDestroy(){executor.shutdownNow();super.onDestroy();}
+    @Override protected void onDestroy(){watching=false;stateHandler.removeCallbacksAndMessages(null);executor.shutdownNow();super.onDestroy();}
 }
