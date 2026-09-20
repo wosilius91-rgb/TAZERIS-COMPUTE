@@ -37,8 +37,12 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Create emulator
         run: |
-          echo no | avdmanager create avd -n tazeris -k "system-images;android-35;google_apis;x86_64" --force
-          nohup emulator -avd tazeris -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/tmp/emulator.log 2>&1 &
+          AVDMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name avdmanager | head -1)"
+          EMULATOR="$ANDROID_HOME/emulator/emulator"
+          test -x "$AVDMANAGER"
+          test -x "$EMULATOR"
+          echo no | "$AVDMANAGER" create avd -n tazeris -k "system-images;android-35;google_apis;x86_64" --force
+          nohup "$EMULATOR" -avd tazeris -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/tmp/emulator.log 2>&1 &
           adb wait-for-device
           for i in $(seq 1 120); do
             BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
