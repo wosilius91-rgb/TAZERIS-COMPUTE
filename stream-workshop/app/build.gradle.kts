@@ -24,7 +24,7 @@ android {
     }
 }
 dependencies {
-    implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:ab984a8e3bcd0bc6d4b5f90860815f7b10476541")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
 }
