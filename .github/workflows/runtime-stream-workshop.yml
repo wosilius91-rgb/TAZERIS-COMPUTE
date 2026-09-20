@@ -1,0 +1,75 @@
+name: Runtime Smoke TAZERIS Video Dirbtuve
+
+on:
+  push:
+    branches: [stream-workshop-build]
+    paths:
+      - '.github/workflows/runtime-stream-workshop.yml'
+  workflow_dispatch:
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stream-workshop-build
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Build APK
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;google_apis;x86_64"
+          gradle -p stream-workshop :app:assembleDebug
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Create emulator
+        run: |
+          echo no | avdmanager create avd -n tazeris -k "system-images;android-35;google_apis;x86_64" --force
+          nohup emulator -avd tazeris -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/tmp/emulator.log 2>&1 &
+          adb wait-for-device
+          for i in $(seq 1 120); do
+            BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [ "$BOOT" = "1" ]; then break; fi
+            sleep 2
+          done
+          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
+      - name: Install and launch
+        run: |
+          set -euo pipefail
+          APK=stream-workshop/app/build/outputs/apk/debug/app-debug.apk
+          adb install -r "$APK"
+          adb logcat -c
+          adb shell am start -W -n com.tazeris.streamworkshop/.MainActivity | tee /tmp/am.txt
+          sleep 5
+          PID="$(adb shell pidof com.tazeris.streamworkshop | tr -d '\r')"
+          echo "PID=$PID"
+          test -n "$PID"
+          adb shell dumpsys activity activities | grep -q "com.tazeris.streamworkshop"
+          adb logcat -d > /tmp/logcat.txt
+          if grep -qE "FATAL EXCEPTION|Process: com.tazeris.streamworkshop.*has died" /tmp/logcat.txt; then
+            grep -A40 -B10 -E "FATAL EXCEPTION|Process: com.tazeris.streamworkshop.*has died" /tmp/logcat.txt
+            exit 1
+          fi
+          echo "ANDROID_RUNTIME_SMOKE=PASS"
+      - name: Upload runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAZERIS-Video-Dirbtuve-runtime-logs
+          path: |
+            /tmp/am.txt
+            /tmp/logcat.txt
+            /tmp/emulator.log
+          retention-days: 7
