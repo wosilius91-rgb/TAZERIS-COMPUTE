@@ -1,0 +1,86 @@
+name: V3 Action Montage Smoke
+
+on:
+  push:
+    branches: [stream-workshop-build]
+    paths:
+      - '.github/workflows/v3-action-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stream-workshop-build
+      - name: Create synthetic action video
+        run: |
+          ffmpeg -y             -f lavfi -i "testsrc2=size=640x360:rate=30:duration=36"             -f lavfi -i "sine=frequency=330:sample_rate=44100:duration=36"             -c:v libx264 -preset ultrafast -crf 25 -pix_fmt yuv420p             -c:a aac -b:a 128k -shortest /tmp/source.mp4
+          test -s /tmp/source.mp4
+      - name: Upload and run V3
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.request, urllib.error
+          BASE='https://tazeris-stream-clipper-v2-production.up.railway.app'
+          src='/tmp/source.mp4'
+          def req(path, method='GET', data=None, ctype='application/json'):
+              body=None
+              headers={'User-Agent':'TAZERIS-V3-Smoke/1.0'}
+              if data is not None:
+                  if isinstance(data,(dict,list)):
+                      body=json.dumps(data).encode();headers['Content-Type']='application/json'
+                  else:
+                      body=data;headers['Content-Type']=ctype
+              r=urllib.request.Request(BASE+path,data=body,headers=headers,method=method)
+              with urllib.request.urlopen(r,timeout=180) as x:
+                  raw=x.read()
+                  return json.loads(raw.decode()) if raw and 'json' in x.headers.get('content-type','') else raw
+          meta=req('/api/mobile/init','POST',{
+              'video_name':'smoke.mp4','video_size':os.path.getsize(src),
+              'audio_name':'','audio_size':0,'tiktok':'@tazeris5','youtube':'@tazeris5',
+              'discord':'','language':'lt','min_score':8.35
+          })
+          sid=meta['id'];chunk=meta['chunk_size']
+          with open(src,'rb') as f:
+              i=0
+              while True:
+                  b=f.read(chunk)
+                  if not b:break
+                  req(f'/api/mobile/{sid}/video/{i}','PUT',b,'application/octet-stream');i+=1
+          job=req(f'/api/mobile/{sid}/complete','POST',{})
+          jid=job['id'];print('JOB',jid)
+          state=None
+          for n in range(240):
+              time.sleep(3)
+              state=req('/api/jobs/'+jid)
+              print(n,state.get('status'),state.get('stage'),state.get('progress'),state.get('message'))
+              if state.get('status') in ('done','error'):break
+          if not state or state.get('status')!='done':
+              raise SystemExit('JOB_FAILED '+json.dumps(state,ensure_ascii=False)[:3000])
+          clips=state.get('clips') or []
+          print('CLIPS',len(clips),clips)
+          if not (1 <= len(clips) <= 4):
+              raise SystemExit('BAD_CLIP_COUNT')
+          u=clips[0]['url']
+          with urllib.request.urlopen(BASE+u,timeout=180) as r, open('/tmp/clip.mp4','wb') as o:
+              o.write(r.read())
+          if os.path.getsize('/tmp/clip.mp4')<100000:
+              raise SystemExit('CLIP_TOO_SMALL')
+          print('V3_ACTION_SMOKE=PASS')
+          PY
+      - name: Probe result media
+        run: |
+          ffprobe -v error -show_entries format=duration -show_streams /tmp/clip.mp4 > /tmp/probe.txt
+          grep -q "codec_type=video" /tmp/probe.txt
+          grep -q "codec_type=audio" /tmp/probe.txt
+          cat /tmp/probe.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v3-action-smoke-result
+          path: |
+            /tmp/clip.mp4
+            /tmp/probe.txt
+          retention-days: 7
