@@ -1,0 +1,26 @@
+name: TAZERIS YouTube Egress Probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/youtube-egress-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install yt-dlp
+        run: python -m pip install --upgrade "yt-dlp[default]"
+      - name: Install Deno
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+      - name: Probe public YouTube video
+        run: |
+          "$HOME/.deno/bin/deno" --version
+          yt-dlp --no-playlist --js-runtimes deno --remote-components ejs:github --simulate "https://www.youtube.com/watch?v=jNQXAC9IVRw"
