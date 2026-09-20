@@ -19,7 +19,12 @@ android {
         release { isMinifyEnabled = false }
         debug { isMinifyEnabled = false }
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 dependencies {
     implementation("com.github.teamnewpipe:NewPipeExtractor:v0.26.5")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }
