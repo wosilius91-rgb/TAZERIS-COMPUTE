@@ -1,0 +1,73 @@
+name: Background Screen-Off Smoke
+
+on:
+  push:
+    branches: [stream-workshop-build]
+    paths:
+      - '.github/workflows/background-screenoff-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stream-workshop-build
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Build APK
+        run: gradle -p stream-workshop :app:assembleDebug
+      - name: Prepare slow local media
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -y -f lavfi -i "testsrc2=size=1280x720:rate=30:duration=90"             -f lavfi -i "sine=frequency=440:sample_rate=44100:duration=90"             -c:v libx264 -preset ultrafast -crf 12 -pix_fmt yuv420p -c:a aac -b:a 128k -shortest /tmp/bg.mp4
+          ls -lh /tmp/bg.mp4
+          cd /tmp && python3 -m http.server 8000 >/tmp/http.log 2>&1 &
+      - name: Install, start foreground service, turn screen off
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            set -euo pipefail
+            APK=stream-workshop/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r "$APK"
+            adb reverse tcp:8000 tcp:8000
+            adb shell am start-foreground-service               -n com.tazeris.streamworkshop/.StreamWorkService               --es url "http://127.0.0.1:8000/bg.mp4"               --es tiktok "@tazeris5" --es youtube "@tazeris5" --es discord ""
+            sleep 3
+            adb shell input keyevent 26
+            sleep 8
+            echo "=== POWER ==="
+            adb shell dumpsys power | grep -E "Wakefulness|Display Power" || true
+            echo "=== SERVICE ==="
+            adb shell dumpsys activity services com.tazeris.streamworkshop | tee /tmp/service.txt
+            grep -q "StreamWorkService" /tmp/service.txt
+            PID="$(adb shell pidof com.tazeris.streamworkshop | tr -d '\r')"
+            test -n "$PID"
+            echo "PID=$PID"
+            adb shell dumpsys notification --noredact > /tmp/notif.txt || true
+            grep -q "TAZERIS Video Dirbtuvė" /tmp/notif.txt
+            echo "BACKGROUND_SCREEN_OFF_SMOKE=PASS"
+            adb shell input keyevent 26 || true
+            adb shell am startservice -n com.tazeris.streamworkshop/.StreamWorkService -a STOP || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: background-screenoff-logs
+          path: |
+            /tmp/service.txt
+            /tmp/notif.txt
+            /tmp/http.log
+          retention-days: 7
