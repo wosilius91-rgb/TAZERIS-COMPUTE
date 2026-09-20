@@ -45,6 +45,16 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         NewPipe.init(new PhoneDownloader());
         setContentView(buildUi());
+        executor.execute(() -> {
+            try {
+                JSONObject h=json(API+"/health","GET",null);
+                telemetry("app_start","Dirbtuvė paleista","V2 "+h.optString("version","?"));
+                progress("PARUOŠTA",0,"Dirbtuvė paruošta","V2 serveris pasiekiamas");
+            } catch(Exception e) {
+                telemetry("startup_error","Serverio patikra nepavyko",cleanError(e));
+                progress("RYŠIO KLAIDA",0,"V2 serverio pasiekti nepavyko",cleanError(e));
+            }
+        });
     }
 
     private View buildUi() {
@@ -110,7 +120,11 @@ public class MainActivity extends Activity {
     private void progress(String stage,int pct,String msg,String detail){
         runOnUiThread(()->{stageText.setText(stage.toUpperCase(Locale.ROOT));progressBar.setProgress(Math.max(0,Math.min(100,pct)));percentText.setText(Math.max(0,Math.min(100,pct))+"%");messageText.setText(msg);detailText.setText(detail==null?"":detail);});
     }
-    private void fail(Exception e){setBusy(false);progress("KLAIDA",100,"Procesas sustabdytas",cleanError(e));}
+    private void fail(Exception e){
+        String msg=cleanError(e);
+        telemetry("client_error","Procesas sustabdytas",msg);
+        setBusy(false);progress("KLAIDA",100,"Procesas sustabdytas",msg);
+    }
     private String cleanError(Throwable e){String s=e.getMessage();return (s==null||s.isBlank())?e.getClass().getSimpleName():s;}
 
     private void startLink(){
@@ -122,7 +136,9 @@ public class MainActivity extends Activity {
             File video=null,audio=null;
             try{
                 progress("Nuorodos analizė",2,"Telefonas analizuoja streamą…","Naudojamas tavo telefono internetas");
+                telemetry("link_start","Pradėta nuorodos analizė",url);
                 StreamInfo info=StreamInfo.getInfo(url);
+                telemetry("link_resolved","YouTube nuoroda išanalizuota",info.getName());
                 progress("Srautų parinkimas",6,"Parenkama geriausia kokybė…",info.getName());
 
                 VideoStream bestVideoOnly=bestVideo(info.getVideoOnlyStreams(),true);
@@ -193,6 +209,7 @@ public class MainActivity extends Activity {
         init.put("video_name",video.getName());init.put("video_size",video.length());
         init.put("audio_name",audio==null?"":audio.getName());init.put("audio_size",audio==null?0:audio.length());
         init.put("tiktok",tiktokInput.getText().toString());init.put("youtube",youtubeInput.getText().toString());init.put("discord",discordInput.getText().toString());init.put("language","lt");init.put("min_score",7.3);
+        telemetry("upload_start","Pradedamas perdavimas į V2",video.getName()+(audio!=null?" + "+audio.getName():""));
         progress("Perdavimas",49,"Ruošiamas perdavimas į AI serverį…","");
         JSONObject meta=json(API+"/api/mobile/init","POST",init.toString());
         String sid=meta.getString("id");int chunk=meta.getInt("chunk_size");
@@ -200,6 +217,7 @@ public class MainActivity extends Activity {
         if(audio!=null)uploadFile(sid,"audio",audio,chunk,59,64);
         progress("Perdavimas",65,"Vaizdas ir garsas perduoti","Sujungiama be kokybės praradimo");
         JSONObject job=json(API+"/api/mobile/"+sid+"/complete","POST","{}");
+        telemetry("server_job_created","V2 užduotis sukurta",job.optString("id",""));
         poll(job.getString("id"));
     }
 
@@ -220,7 +238,7 @@ public class MainActivity extends Activity {
             JSONObject j=json(API+"/api/jobs/"+jobId,"GET",null);
             String st=j.optString("status","processing");int rp=j.optInt("progress",0);int p=65+(int)(rp*.35);
             progress(j.optString("stage","AI analizė"),Math.min(100,p),j.optString("message","Apdorojama…"),j.optString("detail",""));
-            if("done".equals(st)){showResults(j.optJSONArray("clips"));setBusy(false);return;}
+            if("done".equals(st)){telemetry("job_done","Video paruošti","clips="+(j.optJSONArray("clips")==null?0:j.optJSONArray("clips").length()));showResults(j.optJSONArray("clips"));setBusy(false);return;}
             if("error".equals(st))throw new IOException(j.optString("message","AI serverio klaida"));
             Thread.sleep(2000);
         }
@@ -258,6 +276,14 @@ public class MainActivity extends Activity {
         }
     }
     private long querySize(Uri uri){try(android.database.Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.SIZE},null,null,null)){if(c!=null&&c.moveToFirst()){int x=c.getColumnIndex(OpenableColumns.SIZE);if(x>=0)return c.getLong(x);}}catch(Exception ignored){}return -1;}
+
+    private void telemetry(String event,String message,String detail){
+        try{
+            JSONObject x=new JSONObject();
+            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.0.1");
+            json(API+"/api/mobile/event","POST",x.toString());
+        }catch(Exception ignored){}
+    }
 
     private JSONObject json(String url,String method,String body)throws Exception{
         HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setRequestMethod(method);c.setConnectTimeout(30000);c.setReadTimeout(120000);c.setRequestProperty("User-Agent",UA);c.setRequestProperty("Accept","application/json");
