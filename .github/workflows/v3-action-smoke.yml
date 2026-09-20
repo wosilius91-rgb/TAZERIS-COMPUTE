@@ -67,6 +67,8 @@ jobs:
           print('CLIPS',len(clips),clips)
           if not (1 <= len(clips) <= 4):
               raise SystemExit('BAD_CLIP_COUNT')
+          if any(float(c.get('duration',0)) < 24 for c in clips):
+              raise SystemExit('CLIP_TOO_SHORT '+json.dumps(clips,ensure_ascii=False))
           u=clips[0]['url']
           with urllib.request.urlopen(BASE+u,timeout=180) as r, open('/tmp/clip.mp4','wb') as o:
               o.write(r.read())
