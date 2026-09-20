@@ -34,23 +34,23 @@ jobs:
       - name: Install, start foreground service, turn screen off
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
-          target: google_apis
+          api-level: 33
+          target: default
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
-            set -eu
-            APK=stream-workshop/app/build/outputs/apk/debug/app-debug.apk
-            adb install -r "$APK"
+            adb install -r stream-workshop/app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm grant com.tazeris.streamworkshop android.permission.POST_NOTIFICATIONS || true
             adb reverse tcp:8000 tcp:8000
             adb shell am start-foreground-service               -n com.tazeris.streamworkshop/.StreamWorkService               --es url "http://127.0.0.1:8000/bg.mp4"               --es tiktok "@tazeris5" --es youtube "@tazeris5" --es discord ""
             sleep 3
             adb shell input keyevent 26
             sleep 8
             echo "=== POWER ==="
-            adb shell dumpsys power | grep -E "Wakefulness|Display Power" || true
+            adb shell dumpsys power | tee /tmp/power.txt
+            grep -qE "Wakefulness=Asleep|mWakefulness=Asleep|Display Power.*OFF" /tmp/power.txt
             echo "=== SERVICE ==="
             adb shell dumpsys activity services com.tazeris.streamworkshop | tee /tmp/service.txt
             grep -q "StreamWorkService" /tmp/service.txt
@@ -69,5 +69,7 @@ jobs:
           path: |
             /tmp/service.txt
             /tmp/notif.txt
+            /tmp/power.txt
+            /tmp/pid.txt
             /tmp/http.log
           retention-days: 7
