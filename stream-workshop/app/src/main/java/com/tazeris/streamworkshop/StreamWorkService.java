@@ -3,7 +3,6 @@ package com.tazeris.streamworkshop;
 import android.app.*;
 import android.content.*;
 import android.os.*;
-import android.annotation.Nullable;
 
 import com.yausername.youtubedl_android.YoutubeDL;
 import com.yausername.youtubedl_android.YoutubeDLRequest;
@@ -256,6 +255,6 @@ public class StreamWorkService extends Service {
     private String mb(long n){return String.format(Locale.US,"%.1f MB",n/1024.0/1024.0);}
     private void clearDir(File d){File[] fs=d.listFiles();if(fs!=null)for(File f:fs)if(f.isFile())f.delete();}
     private static final String UA="Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 Chrome/153 Safari/537.36";
-    @Nullable @Override public android.os.IBinder onBind(Intent intent){return null;}
+    @Override public android.os.IBinder onBind(Intent intent){return null;}
     @Override public void onDestroy(){running=false;releaseWake();super.onDestroy();}
 }
