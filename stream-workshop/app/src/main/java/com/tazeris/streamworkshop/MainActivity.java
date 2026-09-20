@@ -13,15 +13,12 @@ import android.graphics.Typeface;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.schabi.newpipe.extractor.MediaFormat;
-import org.schabi.newpipe.extractor.NewPipe;
-import org.schabi.newpipe.extractor.downloader.Downloader;
-import org.schabi.newpipe.extractor.downloader.Request;
-import org.schabi.newpipe.extractor.downloader.Response;
-import org.schabi.newpipe.extractor.exceptions.ReCaptchaException;
-import org.schabi.newpipe.extractor.stream.AudioStream;
-import org.schabi.newpipe.extractor.stream.StreamInfo;
-import org.schabi.newpipe.extractor.stream.VideoStream;
+import com.yausername.youtubedl_android.YoutubeDL;
+import com.yausername.youtubedl_android.YoutubeDLException;
+import com.yausername.youtubedl_android.YoutubeDLRequest;
+import com.yausername.ffmpeg.FFmpeg;
+import kotlin.Unit;
+import kotlin.jvm.functions.Function3;
 
 import java.io.*;
 import java.net.*;
@@ -40,19 +37,26 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private LinearLayout results;
     private volatile boolean busy = false;
+    private volatile boolean ytDlpReady = false;
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
-        NewPipe.init(new PhoneDownloader());
         setContentView(buildUi());
+        setBusy(true);
         executor.execute(() -> {
             try {
+                progress("VARIKLIO PARUOŠIMAS",1,"Ruošiamas telefono video variklis…","yt-dlp + FFmpeg");
+                YoutubeDL.getInstance().init(this);
+                FFmpeg.getInstance().init(this);
+                ytDlpReady = true;
                 JSONObject h=json(API+"/health","GET",null);
-                telemetry("app_start","Dirbtuvė paleista","V2 "+h.optString("version","?"));
-                progress("PARUOŠTA",0,"Dirbtuvė paruošta","V2 serveris pasiekiamas");
+                telemetry("app_start","Dirbtuvė paleista","yt-dlp READY • V2 "+h.optString("version","?"));
+                setBusy(false);
+                progress("PARUOŠTA",0,"Dirbtuvė paruošta","yt-dlp telefone + V2 serveris pasiekiami");
             } catch(Exception e) {
-                telemetry("startup_error","Serverio patikra nepavyko",cleanError(e));
-                progress("RYŠIO KLAIDA",0,"V2 serverio pasiekti nepavyko",cleanError(e));
+                telemetry("startup_error","Variklio paleidimas nepavyko",cleanError(e));
+                setBusy(false);
+                progress("VARIKLIO KLAIDA",100,"Telefono video variklis nepasileido",cleanError(e));
             }
         });
     }
@@ -131,77 +135,46 @@ public class MainActivity extends Activity {
         if(busy)return;
         String url=urlInput.getText().toString().trim();
         if(url.isEmpty()){urlInput.requestFocus();return;}
+        if(!ytDlpReady){progress("VARIKLIO KLAIDA",100,"yt-dlp dar neparuoštas","Perkrauk dirbtuvę");return;}
         setBusy(true); results.removeAllViews();
         executor.execute(()->{
-            File video=null,audio=null;
             try{
-                progress("Nuorodos analizė",2,"Telefonas analizuoja streamą…","Naudojamas tavo telefono internetas");
-                telemetry("link_start","Pradėta nuorodos analizė",url);
-                StreamInfo info=StreamInfo.getInfo(url);
-                telemetry("link_resolved","YouTube nuoroda išanalizuota",info.getName());
-                progress("Srautų parinkimas",6,"Parenkama geriausia kokybė…",info.getName());
-
-                VideoStream bestVideoOnly=bestVideo(info.getVideoOnlyStreams(),true);
-                AudioStream bestAudio=bestAudio(info.getAudioStreams());
-                VideoStream combined=bestVideo(info.getVideoStreams(),false);
-
+                telemetry("link_start","Pradėtas yt-dlp atsisiuntimas",url);
+                progress("Nuorodos analizė",2,"yt-dlp analizuoja streamą…","Naudojamas tavo telefono internetas");
                 File dir=new File(getExternalFilesDir(null),"stream-workshop");
                 if(!dir.exists()&&!dir.mkdirs())throw new IOException("Nepavyko sukurti darbo aplanko");
                 clearDir(dir);
 
-                if(bestVideoOnly!=null && bestAudio!=null){
-                    String vs=suffix(bestVideoOnly.getFormat(),"mp4"), as=suffix(bestAudio.getFormat(),"m4a");
-                    video=new File(dir,"video."+vs); audio=new File(dir,"audio."+as);
-                    download(bestVideoOnly.getContent(),video,7,39,"Siunčiamas aukštos kokybės vaizdas");
-                    download(bestAudio.getContent(),audio,39,48,"Siunčiamas garsas");
-                    uploadPair(video,audio);
-                }else if(combined!=null){
-                    video=new File(dir,"video."+suffix(combined.getFormat(),"mp4"));
-                    download(combined.getContent(),video,7,48,"Siunčiamas streamo įrašas");
-                    uploadPair(video,null);
-                }else{
-                    throw new IOException("Nepavyko rasti tinkamo video srauto.");
-                }
+                String template=new File(dir,"source.%(ext)s").getAbsolutePath();
+                YoutubeDLRequest request=new YoutubeDLRequest(url);
+                request.addOption("--no-playlist");
+                request.addOption("--no-mtime");
+                request.addOption("--merge-output-format","mp4");
+                request.addOption("-f","bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/best[height<=1080]");
+                request.addOption("-o",template);
+                request.addOption("--retries","7");
+                request.addOption("--fragment-retries","7");
+                request.addOption("--socket-timeout","30");
+
+                Function3<Float,Long,String,Unit> cb=(p,eta,line)->{
+                    int pct=Math.max(0,Math.min(100,Math.round(p)));
+                    int appPct=3+(int)(pct*0.44);
+                    String det=(eta!=null&&eta>0)?("Liko ~"+eta+" s"):"";
+                    progress("Atsisiuntimas telefone",appPct,"Siunčiamas streamas… "+pct+"%",det);
+                    return Unit.INSTANCE;
+                };
+                YoutubeDL.getInstance().execute(request,"TAZERIS_STREAM",cb);
+
+                File[] files=dir.listFiles((d,n)->n.startsWith("source.")&&!n.endsWith(".part")&&!n.endsWith(".ytdl"));
+                if(files==null||files.length==0)throw new IOException("yt-dlp baigė darbą, bet video failas nerastas");
+                File video=files[0];
+                for(File f:files)if(f.length()>video.length())video=f;
+                if(video.length()<1024*1024)throw new IOException("Parsisiųstas video failas per mažas");
+                telemetry("link_resolved","yt-dlp video gautas",video.getName()+" • "+mb(video.length()));
+                progress("Atsisiuntimas baigtas",48,"Streamo įrašas gautas telefone",mb(video.length()));
+                uploadPair(video,null);
             }catch(Exception e){fail(e);}
         });
-    }
-
-    private VideoStream bestVideo(List<VideoStream> list, boolean only){
-        VideoStream best=null; int bestH=-1; int bestFmt=-1;
-        for(VideoStream v:list){
-            if(!v.isUrl())continue;
-            int h=height(v.getResolution()); if(h<=0||h>1080)continue;
-            int fmt=v.getFormat()==MediaFormat.MPEG_4?2:1;
-            if(best==null||fmt>bestFmt||(fmt==bestFmt&&h>bestH)){best=v;bestH=h;bestFmt=fmt;}
-        }
-        return best;
-    }
-    private AudioStream bestAudio(List<AudioStream> list){
-        AudioStream best=null; int score=-1;
-        for(AudioStream a:list){
-            if(!a.isUrl())continue;
-            int br=Math.max(a.getAverageBitrate(),a.getBitrate());
-            int fmt=a.getFormat()==MediaFormat.M4A?1000000:0;
-            int s=fmt+Math.max(0,br);
-            if(best==null||s>score){best=a;score=s;}
-        }
-        return best;
-    }
-    private int height(String r){try{java.util.regex.Matcher m=java.util.regex.Pattern.compile("(\\d{3,4})p?").matcher(r==null?"":r);return m.find()?Integer.parseInt(m.group(1)):0;}catch(Exception e){return 0;}}
-    private String suffix(MediaFormat f,String fallback){return f==null?fallback:f.getSuffix();}
-
-    private void download(String url,File out,int p0,int p1,String label)throws Exception{
-        progress("Atsisiuntimas",p0,label+"…","");
-        URLConnection raw=new URL(url).openConnection();
-        HttpURLConnection c=(HttpURLConnection)raw;c.setInstanceFollowRedirects(true);c.setConnectTimeout(30000);c.setReadTimeout(60000);
-        c.setRequestProperty("User-Agent",UA);c.setRequestProperty("Accept","*/*");c.connect();
-        int code=c.getResponseCode();if(code<200||code>=300)throw new IOException("Video srautas grąžino HTTP "+code);
-        long total=c.getContentLengthLong(),got=0,last=0;
-        try(InputStream in=new BufferedInputStream(c.getInputStream());OutputStream o=new BufferedOutputStream(new FileOutputStream(out))){
-            byte[] buf=new byte[1024*1024];int n;
-            while((n=in.read(buf))>=0){o.write(buf,0,n);got+=n;long now=System.currentTimeMillis();if(now-last>500){last=now;int pct=total>0?(int)Math.min(100,got*100/total):0;int app=p0+(int)((p1-p0)*(pct/100.0));progress("Atsisiuntimas",app,label+"… "+pct+"%",mb(got)+(total>0?" / "+mb(total):""));}}
-        }finally{c.disconnect();}
-        progress("Atsisiuntimas",p1,label+" baigtas",mb(out.length()));
     }
 
     private void uploadPair(File video,File audio)throws Exception{
@@ -280,7 +253,7 @@ public class MainActivity extends Activity {
     private void telemetry(String event,String message,String detail){
         try{
             JSONObject x=new JSONObject();
-            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.0.1");
+            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.1.0-yt-dlp");
             json(API+"/api/mobile/event","POST",x.toString());
         }catch(Exception ignored){}
     }
@@ -298,19 +271,6 @@ public class MainActivity extends Activity {
     private void clearDir(File d){File[] fs=d.listFiles();if(fs!=null)for(File f:fs)if(f.isFile())f.delete();}
 
     private static final String UA="Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 Chrome/153 Safari/537.36";
-
-    private static final class PhoneDownloader extends Downloader {
-        @Override public Response execute(Request r)throws IOException, ReCaptchaException{
-            HttpURLConnection c=(HttpURLConnection)new URL(r.url()).openConnection();c.setInstanceFollowRedirects(true);c.setConnectTimeout(30000);c.setReadTimeout(30000);c.setRequestMethod(r.httpMethod());
-            c.setRequestProperty("User-Agent",UA);c.setRequestProperty("Accept","*/*");
-            for(Map.Entry<String,List<String>> e:r.headers().entrySet())for(String v:e.getValue())c.addRequestProperty(e.getKey(),v);
-            byte[] data=r.dataToSend();if(data!=null){c.setDoOutput(true);c.setFixedLengthStreamingMode(data.length);try(OutputStream o=c.getOutputStream()){o.write(data);}}
-            int code=c.getResponseCode();InputStream in=code>=400?c.getErrorStream():c.getInputStream();
-            String body="";if(in!=null){try(BufferedReader br=new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8))){StringBuilder sb=new StringBuilder();String line;while((line=br.readLine())!=null)sb.append(line);body=sb.toString();}}
-            Map<String,List<String>> headers=c.getHeaderFields();String latest=c.getURL().toString();String msg=c.getResponseMessage();c.disconnect();
-            return new Response(code,msg,headers,body,latest);
-        }
-    }
 
     @Override protected void onDestroy(){executor.shutdownNow();super.onDestroy();}
 }
