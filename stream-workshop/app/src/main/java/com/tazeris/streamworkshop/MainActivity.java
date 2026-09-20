@@ -48,11 +48,24 @@ public class MainActivity extends Activity {
                 progress("VARIKLIO PARUOŠIMAS",1,"Ruošiamas telefono video variklis…","yt-dlp + FFmpeg");
                 YoutubeDL.getInstance().init(this);
                 FFmpeg.getInstance().init(this);
+                String before=String.valueOf(YoutubeDL.getInstance().versionName(this));
+                progress("VARIKLIO ATNAUJINIMAS",2,"Atnaujinamas yt-dlp…","Dabartinė versija: "+before);
+                try {
+                    YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel._NIGHTLY);
+                } catch(Exception updateError) {
+                    telemetry("ytdlp_update_warning","NIGHTLY atnaujinimas nepavyko",cleanError(updateError));
+                    try {
+                        YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel._STABLE);
+                    } catch(Exception stableError) {
+                        telemetry("ytdlp_update_warning","STABLE atnaujinimas nepavyko",cleanError(stableError));
+                    }
+                }
+                String after=String.valueOf(YoutubeDL.getInstance().versionName(this));
                 ytDlpReady = true;
                 JSONObject h=json(API+"/health","GET",null);
-                telemetry("app_start","Dirbtuvė paleista","yt-dlp READY • V2 "+h.optString("version","?"));
+                telemetry("app_start","Dirbtuvė paleista","yt-dlp "+after+" • V2 "+h.optString("version","?"));
                 setBusy(false);
-                progress("PARUOŠTA",0,"Dirbtuvė paruošta","yt-dlp telefone + V2 serveris pasiekiami");
+                progress("PARUOŠTA",0,"Dirbtuvė paruošta","yt-dlp "+after+" + V2 serveris pasiekiami");
             } catch(Exception e) {
                 telemetry("startup_error","Variklio paleidimas nepavyko",cleanError(e));
                 setBusy(false);
@@ -146,15 +159,6 @@ public class MainActivity extends Activity {
                 clearDir(dir);
 
                 String template=new File(dir,"source.%(ext)s").getAbsolutePath();
-                YoutubeDLRequest request=new YoutubeDLRequest(url);
-                request.addOption("--no-playlist");
-                request.addOption("--no-mtime");
-                request.addOption("--merge-output-format","mp4");
-                request.addOption("-f","bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/best[height<=1080]");
-                request.addOption("-o",template);
-                request.addOption("--retries","7");
-                request.addOption("--fragment-retries","7");
-                request.addOption("--socket-timeout","30");
 
                 Function3<Float,Long,String,Unit> cb=(p,eta,line)->{
                     int pct=Math.max(0,Math.min(100,Math.round(p)));
@@ -163,7 +167,37 @@ public class MainActivity extends Activity {
                     progress("Atsisiuntimas telefone",appPct,"Siunčiamas streamas… "+pct+"%",det);
                     return Unit.INSTANCE;
                 };
-                YoutubeDL.getInstance().execute(request,"TAZERIS_STREAM",cb);
+
+                String[] clients={"","tv_simply","android_vr","web_safari"};
+                Exception lastError=null;
+                boolean downloaded=false;
+                for(int attempt=0;attempt<clients.length&&!downloaded;attempt++){
+                    for(File old:Objects.requireNonNullElse(dir.listFiles(),new File[0])) {
+                        if(old.getName().startsWith("source.")) old.delete();
+                    }
+                    String client=clients[attempt];
+                    progress("Nuorodos analizė",2+attempt,"YouTube gavimo būdas "+(attempt+1)+"/"+clients.length+"…",client.isEmpty()?"default":client);
+                    telemetry("ytdlp_attempt","YouTube gavimo būdas "+(attempt+1),client.isEmpty()?"default":client);
+                    try{
+                        YoutubeDLRequest request=new YoutubeDLRequest(url);
+                        request.addOption("--no-playlist");
+                        request.addOption("--no-mtime");
+                        request.addOption("--merge-output-format","mp4");
+                        request.addOption("--remote-components","ejs:github");
+                        request.addOption("-f","bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]");
+                        request.addOption("-o",template);
+                        request.addOption("--retries","5");
+                        request.addOption("--fragment-retries","5");
+                        request.addOption("--socket-timeout","30");
+                        if(!client.isEmpty()) request.addOption("--extractor-args","youtube:player_client="+client);
+                        YoutubeDL.getInstance().execute(request,"TAZERIS_STREAM_"+attempt,cb);
+                        downloaded=true;
+                    }catch(Exception e){
+                        lastError=e;
+                        telemetry("ytdlp_attempt_error","Būdas "+(attempt+1)+" nepavyko",cleanError(e));
+                    }
+                }
+                if(!downloaded) throw lastError!=null?lastError:new IOException("Nepavyko gauti YouTube video");
 
                 File[] files=dir.listFiles((d,n)->n.startsWith("source.")&&!n.endsWith(".part")&&!n.endsWith(".ytdl"));
                 if(files==null||files.length==0)throw new IOException("yt-dlp baigė darbą, bet video failas nerastas");
@@ -253,7 +287,7 @@ public class MainActivity extends Activity {
     private void telemetry(String event,String message,String detail){
         try{
             JSONObject x=new JSONObject();
-            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.1.0-yt-dlp");
+            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.2.0-yt-dlp-nightly");
             json(API+"/api/mobile/event","POST",x.toString());
         }catch(Exception ignored){}
     }
