@@ -233,6 +233,7 @@ public class MainActivity extends Activity {
         try(InputStream in=new BufferedInputStream(new FileInputStream(file))){
             int n;while((n=readChunk(in,buf))>0){
                 putBytes(API+"/api/mobile/"+sid+"/"+kind+"/"+idx,buf,n);sent+=n;idx++;
+                if(idx==1 || idx%25==0) telemetry("upload_progress",kind+" upload",idx+" dalys • "+mb(sent));
                 int pct=(int)Math.min(100,sent*100/total);int app=p0+(int)((p1-p0)*(pct/100.0));
                 progress("Perdavimas",app,(kind.equals("video")?"Keliamas vaizdas":"Keliamas garsas")+"… "+pct+"%",mb(sent)+" / "+mb(total));
             }
@@ -287,7 +288,7 @@ public class MainActivity extends Activity {
     private void telemetry(String event,String message,String detail){
         try{
             JSONObject x=new JSONObject();
-            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.2.0-yt-dlp-nightly");
+            x.put("event",event);x.put("message",message);x.put("detail",detail);x.put("app_version","1.3.0-resumable-upload");
             json(API+"/api/mobile/event","POST",x.toString());
         }catch(Exception ignored){}
     }
@@ -298,7 +299,34 @@ public class MainActivity extends Activity {
         int code=c.getResponseCode();InputStream in=code>=400?c.getErrorStream():c.getInputStream();String s=readText(in);c.disconnect();if(code>=400)throw new IOException("Serverio HTTP "+code+": "+s);return new JSONObject(s);
     }
     private void putBytes(String url,byte[] b,int n)throws Exception{
-        HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setRequestMethod("PUT");c.setDoOutput(true);c.setConnectTimeout(30000);c.setReadTimeout(120000);c.setRequestProperty("User-Agent",UA);c.setRequestProperty("Content-Type","application/octet-stream");c.setFixedLengthStreamingMode(n);try(OutputStream o=c.getOutputStream()){o.write(b,0,n);}int code=c.getResponseCode();if(code>=400){String s=readText(c.getErrorStream());c.disconnect();throw new IOException("Upload HTTP "+code+": "+s);}c.disconnect();
+        Exception last=null;
+        for(int attempt=1;attempt<=8;attempt++){
+            HttpURLConnection c=null;
+            try{
+                c=(HttpURLConnection)new URL(url).openConnection();
+                c.setRequestMethod("PUT");
+                c.setDoOutput(true);
+                c.setConnectTimeout(45000);
+                c.setReadTimeout(180000);
+                c.setRequestProperty("User-Agent",UA);
+                c.setRequestProperty("Content-Type","application/octet-stream");
+                c.setRequestProperty("Connection","close");
+                c.setFixedLengthStreamingMode(n);
+                try(OutputStream o=new BufferedOutputStream(c.getOutputStream(),256*1024)){
+                    o.write(b,0,n);o.flush();
+                }
+                int code=c.getResponseCode();
+                if(code>=200&&code<300){c.disconnect();return;}
+                String s=readText(c.getErrorStream());
+                throw new IOException("Upload HTTP "+code+": "+s);
+            }catch(Exception e){
+                last=e;
+                telemetry("upload_retry","Upload dalis kartojama","bandymas="+attempt+" • "+cleanError(e));
+                if(c!=null)c.disconnect();
+                if(attempt<8)Thread.sleep(Math.min(8000,500L*(1L<<Math.min(attempt,4))));
+            }
+        }
+        throw last!=null?last:new IOException("Upload nepavyko");
     }
     private String readText(InputStream in)throws IOException{if(in==null)return "";try(BufferedReader r=new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8))){StringBuilder b=new StringBuilder();String l;while((l=r.readLine())!=null)b.append(l);return b.toString();}}
     private String mb(long n){return String.format(Locale.US,"%.1f MB",n/1024.0/1024.0);}
