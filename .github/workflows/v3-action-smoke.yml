@@ -15,6 +15,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: stream-workshop-build
+      - name: Install media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Create synthetic action video
         run: |
           ffmpeg -y             -f lavfi -i "testsrc2=size=640x360:rate=30:duration=36"             -f lavfi -i "sine=frequency=330:sample_rate=44100:duration=36"             -c:v libx264 -preset ultrafast -crf 25 -pix_fmt yuv420p             -c:a aac -b:a 128k -shortest /tmp/source.mp4
