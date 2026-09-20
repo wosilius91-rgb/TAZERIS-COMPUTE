@@ -6,6 +6,9 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "com.tazeris.streamworkshop"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
         minSdk = 33
         targetSdk = 36
         versionCode = 1
@@ -24,7 +27,8 @@ android {
     }
 }
 dependencies {
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:ab984a8e3bcd0bc6d4b5f90860815f7b10476541")
-    testImplementation("junit:junit:4.13.2")
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+        testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16.1")
 }
