@@ -43,26 +43,29 @@ jobs:
           test -x "$EMULATOR"
           echo no | "$AVDMANAGER" create avd -n tazeris -k "system-images;android-35;google_apis;x86_64" --force
           nohup "$EMULATOR" -avd tazeris -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect >/tmp/emulator.log 2>&1 &
-          adb wait-for-device
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          test -x "$ADB"
+          "$ADB" wait-for-device
           for i in $(seq 1 120); do
-            BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            BOOT="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
             if [ "$BOOT" = "1" ]; then break; fi
             sleep 2
           done
-          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
+          test "$("$ADB" shell getprop sys.boot_completed | tr -d '\r')" = "1"
       - name: Install and launch
         run: |
           set -euo pipefail
           APK=stream-workshop/app/build/outputs/apk/debug/app-debug.apk
-          adb install -r "$APK"
-          adb logcat -c
-          adb shell am start -W -n com.tazeris.streamworkshop/.MainActivity | tee /tmp/am.txt
+          ADB="$ANDROID_HOME/platform-tools/adb"
+          "$ADB" install -r "$APK"
+          "$ADB" logcat -c
+          "$ADB" shell am start -W -n com.tazeris.streamworkshop/.MainActivity | tee /tmp/am.txt
           sleep 5
-          PID="$(adb shell pidof com.tazeris.streamworkshop | tr -d '\r')"
+          PID="$("$ADB" shell pidof com.tazeris.streamworkshop | tr -d '\r')"
           echo "PID=$PID"
           test -n "$PID"
-          adb shell dumpsys activity activities | grep -q "com.tazeris.streamworkshop"
-          adb logcat -d > /tmp/logcat.txt
+          "$ADB" shell dumpsys activity activities | grep -q "com.tazeris.streamworkshop"
+          "$ADB" logcat -d > /tmp/logcat.txt
           if grep -qE "FATAL EXCEPTION|Process: com.tazeris.streamworkshop.*has died" /tmp/logcat.txt; then
             grep -A40 -B10 -E "FATAL EXCEPTION|Process: com.tazeris.streamworkshop.*has died" /tmp/logcat.txt
             exit 1
