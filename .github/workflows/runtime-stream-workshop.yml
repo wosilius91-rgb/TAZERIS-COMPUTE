@@ -1,4 +1,5 @@
 name: Runtime Smoke TAZERIS Video Dirbtuve
+# diagnostics-v2
 
 on:
   push:
