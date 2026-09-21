@@ -1,0 +1,32 @@
+name: Inspect Latest Real Clip
+
+on:
+  push:
+    branches: [stream-workshop-build]
+    paths:
+      - '.github/workflows/inspect-latest-real-clip.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch real clip
+        run: |
+          curl -L --fail --retry 3             "https://tazeris-stream-clipper-v2-production.up.railway.app/api/jobs/14c37861b148/clips/1"             -o /tmp/real.mp4
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 /tmp/real.mp4 > /tmp/duration.txt
+          mkdir -p /tmp/frames
+          ffmpeg -y -i /tmp/real.mp4 -vf "fps=1/2,scale=360:-2" /tmp/frames/f_%03d.jpg
+          ffmpeg -y -i /tmp/real.mp4 -vf "fps=1/2,scale=360:-2,tile=4x4" -frames:v 1 /tmp/contact.jpg || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: latest-real-clip-inspection
+          path: |
+            /tmp/real.mp4
+            /tmp/duration.txt
+            /tmp/contact.jpg
+            /tmp/frames
+          retention-days: 7
