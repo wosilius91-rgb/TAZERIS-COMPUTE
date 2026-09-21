@@ -18,10 +18,18 @@ jobs:
       - name: Install media tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg espeak-ng
       - name: Create synthetic action video
         run: |
-          ffmpeg -y             -f lavfi -i "testsrc2=size=640x360:rate=30:duration=36"             -f lavfi -i "sine=frequency=330:sample_rate=44100:duration=36"             -c:v libx264 -preset ultrafast -crf 25 -pix_fmt yuv420p             -c:a aac -b:a 128k -shortest /tmp/source.mp4
+          espeak-ng -v lt -s 165 -w /tmp/voice.wav "Čia labai pavojinga. Matau priešą. Vienas nušautas. Dar du ateina iš kairės. Palauk, palauk. Dabar šaunu. Geras. Vos likau gyvas. Dar vienas priešas. Pavyko. Čia buvo labai arti."
+          ffmpeg -y \
+            -f lavfi -i "testsrc2=size=640x360:rate=30:duration=36" \
+            -stream_loop -1 -i /tmp/voice.wav \
+            -f lavfi -i "sine=frequency=330:sample_rate=44100:duration=36" \
+            -filter_complex "[1:a]volume=1.4[voice];[2:a]volume=0.05[game];[voice][game]amix=inputs=2:duration=longest:dropout_transition=1[a]" \
+            -map 0:v -map "[a]" -t 36 \
+            -c:v libx264 -preset ultrafast -crf 25 -pix_fmt yuv420p \
+            -c:a aac -b:a 128k /tmp/source.mp4
           test -s /tmp/source.mp4
       - name: Upload and run V3
         run: |
@@ -65,8 +73,11 @@ jobs:
               raise SystemExit('JOB_FAILED '+json.dumps(state,ensure_ascii=False)[:3000])
           clips=state.get('clips') or []
           print('CLIPS',len(clips),clips)
-          if not (1 <= len(clips) <= 4):
+          if not (1 <= len(clips) <= 2):
               raise SystemExit('BAD_CLIP_COUNT')
+          for c in clips:
+              if c.get('mode')=='dialogue' and int(c.get('subtitle_words',0)) < 6:
+                  raise SystemExit('BAD_DIALOGUE_WORD_COUNT '+json.dumps(c,ensure_ascii=False))
           if any(float(c.get('duration',0)) < 24 for c in clips):
               raise SystemExit('CLIP_TOO_SHORT '+json.dumps(clips,ensure_ascii=False))
           u=clips[0]['url']
