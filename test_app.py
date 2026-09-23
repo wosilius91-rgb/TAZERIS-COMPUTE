@@ -19,6 +19,12 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("englishPrompt,", html)
         self.assertIn("1024,", html)
         self.assertIn("SAVO gebėjimą", html)
+        self.assertIn("1–5 sakiniais", html)
+        self.assertIn("isTazerisPromo", html)
+        self.assertIn("localTazerisPromo", html)
+        self.assertIn('canvas.toDataURL("image/png")', html)
+        self.assertIn("be GPU limito", html)
+        self.assertIn("renderLiteMarkdown", html)
 
 if __name__ == "__main__":
     unittest.main()
