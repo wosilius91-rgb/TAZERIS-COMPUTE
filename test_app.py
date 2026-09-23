@@ -24,7 +24,7 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("client.predict(imageEndpoint,[", html)
         self.assertIn("englishPrompt,", html)
         self.assertIn("1024,", html)
-        self.assertIn("SAVO gebėjimą", html)
+        self.assertIn("savo gebėjimą", html)
         self.assertIn("1–5 sakiniais", html)
         self.assertIn("isTazerisPromo", html)
         self.assertIn("localTazerisPromo", html)
