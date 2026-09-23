@@ -46,7 +46,7 @@ button:disabled{opacity:.55}
     <option value="text">Klausimas / tekstas</option>
     <option value="image">Nuotrauka</option>
   </select>
-  <div class="hint">Be registracijos, SMS ir API raktų. Tekstui naudojamas stipresnis serverio AI, nuotraukoms – generatyvinis vaizdų modelis.</div>
+  <div class="hint">Be registracijos, SMS ir API raktų. Tekstas veikia telefone, TAZERIS reklaminiai vizualai – be GPU limito.</div>
   <div class="chat" id="chat">
     <div class="msg bot">Rašyk, ko reikia. Gali klausti, prašyti kodo arba parašyti „sukurk nuotrauką…“.<div class="meta">TAZERIS AI</div></div>
   </div>
@@ -61,11 +61,17 @@ button:disabled{opacity:.55}
 
 <script type="module">
 import { Client } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm";
+
+env.allowLocalModels=false;
+env.useBrowserCache=true;
 
 const $=id=>document.getElementById(id);
 const chat=$("chat"), box=$("prompt"), send=$("send"), mode=$("mode"), state=$("state");
-let textClientPromise=null, imageClientPromise=null, textEndpoint=null, imageEndpoint=null;
+let localGeneratorPromise=null, imageClientPromise=null, imageEndpoint=null;
 let conversation=[];
+let lastArtifact="";
+let promoLevel=1;
 
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -145,71 +151,99 @@ async function chooseEndpoint(client,candidates){
   return candidates[0];
 }
 
-async function textClient(){
-  if(!textClientPromise){
-    textClientPromise=Client.connect("akhaliq/Qwen3-VL-4B-Instruct");
+async function getLocalGenerator(){
+  if(localGeneratorPromise) return localGeneratorPromise;
+
+  localGeneratorPromise=(async()=>{
+    const hasWebGPU=!!navigator.gpu;
+    state.textContent="Kraunamas AI…";
+
+    if(hasWebGPU){
+      try{
+        return await pipeline(
+          "text-generation",
+          "onnx-community/Qwen2.5-1.5B-Instruct",
+          {device:"webgpu",dtype:"q4"}
+        );
+      }catch(e){
+        console.warn("1.5B WebGPU failed, falling back",e);
+      }
+    }
+
+    return await pipeline(
+      "text-generation",
+      "onnx-community/Qwen2.5-0.5B-Instruct",
+      {dtype:"q4"}
+    );
+  })();
+
+  try{
+    return await localGeneratorPromise;
+  }catch(e){
+    localGeneratorPromise=null;
+    throw e;
   }
-  const c=await textClientPromise;
-  if(!textEndpoint) textEndpoint=await chooseEndpoint(c,["/chat_fn"]);
-  return c;
 }
 
-async function imageClient(){
-  if(!imageClientPromise){
-    imageClientPromise=Client.connect("black-forest-labs/FLUX.1-schnell");
-  }
-  const c=await imageClientPromise;
-  if(!imageEndpoint) imageEndpoint=await chooseEndpoint(c,["/infer"]);
-  return c;
+function trimConversationForLocal(){
+  return conversation.slice(-8);
 }
 
-async function runTextRequest(userText,history=[]){
-  const client=await textClient();
-  const prepared=
-    "Atsakyk LIETUVIŠKAI. Pirmas sakinys turi tiesiai atsakyti į klausimą. Būk tikslus, konkretus ir praktiškas. "+
-    "Į paprastą klausimą atsakyk trumpai – dažniausiai 1–5 sakiniais. Sąrašų, pamokų ir pavyzdžių nedėk, jei vartotojas jų neprašė. "+
-    "Jei vartotojas klausia, ar tu moki / gali ką nors padaryti, atsakyk apie SAVO gebėjimą tai atlikti, o ne aiškink, kaip vartotojui to mokytis. "+
-    "Jei prašoma programavimo užduoties, pateik teisingą sprendimą ir kodą. "+
-    "Jei kažko tikrai nežinai, aiškiai tai pasakyk. Neprikurk faktų.\n\n"+
-    "Vartotojo klausimas:\n"+userText;
+async function runTextRequest(userText){
+  const generator=await getLocalGenerator();
+  const history=trimConversationForLocal();
+  const messages=[
+    {
+      role:"system",
+      content:
+        "Atsakyk LIETUVIŠKAI. Pirmas sakinys turi tiesiai atsakyti į klausimą. "+
+        "Būk tikslus, konkretus ir praktiškas. Į paprastą klausimą atsakyk trumpai – dažniausiai 1–5 sakiniais. "+
+        "Jei vartotojas klausia, ar tu moki ar gali ką nors padaryti, atsakyk apie savo gebėjimą tai atlikti. "+
+        "Sąrašų, pamokų ir pavyzdžių nedėk, jei vartotojas jų neprašė. "+
+        "Jei prašoma programavimo užduoties, pateik teisingą sprendimą ir kodą. "+
+        "Jei kažko tikrai nežinai, aiškiai tai pasakyk. Neprikurk faktų."
+    },
+    ...history,
+    {role:"user",content:userText}
+  ];
 
-  const result=await client.predict(textEndpoint,[
-    {text:prepared,files:[]},
-    history
-  ]);
-  const data=result?.data||[];
-  const hist=Array.isArray(data[1])?data[1]:[];
-  const assistant=[...hist].reverse().find(x=>x?.role==="assistant");
-  const answer=contentText(assistant?.content).trim();
+  const result=await generator(messages,{
+    max_new_tokens:260,
+    do_sample:true,
+    temperature:.45,
+    top_p:.9
+  });
+
+  const generated=result?.[0]?.generated_text;
+  let answer="";
+  if(Array.isArray(generated)){
+    answer=contentText(generated.at(-1)?.content).trim();
+  }else{
+    answer=String(generated||"").trim();
+  }
   if(!answer) throw new Error("Teksto AI negrąžino atsakymo.");
   return answer;
 }
 
 async function answerText(q){
   busy(true,"Klausiu AI…");
-  const answer=await runTextRequest(q,conversation);
+  const answer=await runTextRequest(q);
   conversation.push({role:"user",content:q},{role:"assistant",content:answer});
   if(conversation.length>12) conversation=conversation.slice(-12);
   addText(answer,"bot","TAZERIS AI",true);
 }
 
 async function translateImagePrompt(q){
-  try{
-    const client=await textClient();
-    const prompt=
-      "Translate the Lithuanian image request below into ONE concise, vivid English text-to-image prompt. "+
-      "Preserve brand names and intent. Output ONLY the English prompt, no explanation.\n\n"+q;
-    const result=await client.predict(textEndpoint,[
-      {text:prompt,files:[]},
-      []
-    ]);
-    const data=result?.data||[];
-    const hist=Array.isArray(data[1])?data[1]:[];
-    const assistant=[...hist].reverse().find(x=>x?.role==="assistant");
-    return contentText(assistant?.content).trim()||q;
-  }catch(_){
-    return q;
-  }
+  const common=[
+    [/reklam\w*/gi,"advertising poster"],
+    [/nuotrauk\w*|foto\w*/gi,"image"],
+    [/įspūding\w*/gi,"spectacular"],
+    [/profesional\w*/gi,"professional"],
+    [/futurist\w*/gi,"futuristic"]
+  ];
+  let out=q;
+  for(const [re,repl] of common) out=out.replace(re,repl);
+  return out;
 }
 
 function fileUrls(file){
@@ -242,6 +276,11 @@ function isTazerisPromo(q){
   return /tazer/i.test(q) && /reklam|promo|baner|banner|poster|vizual|nuotrauk|foto/i.test(q);
 }
 
+function isVisualRefinement(q){
+  return lastArtifact==="tazeris-promo" &&
+    /įspūding|stipriau|geriau|gražiau|wow|kitok|perdaryk|dar\s+vien|dar\s+ger/i.test(q);
+}
+
 function roundRect(ctx,x,y,w,h,r){
   r=Math.min(r,w/2,h/2);
   ctx.beginPath();
@@ -253,74 +292,102 @@ function roundRect(ctx,x,y,w,h,r){
   ctx.closePath();
 }
 
-function localTazerisPromo(q){
+function localTazerisPromo(q,level=1){
   const canvas=document.createElement("canvas");
   canvas.width=1080; canvas.height=1080;
   const ctx=canvas.getContext("2d");
 
   const bg=ctx.createLinearGradient(0,0,1080,1080);
-  bg.addColorStop(0,"#07101f");
-  bg.addColorStop(.48,"#101936");
-  bg.addColorStop(1,"#05070d");
+  if(level%3===1){
+    bg.addColorStop(0,"#050913"); bg.addColorStop(.5,"#0d1835"); bg.addColorStop(1,"#02040a");
+  }else if(level%3===2){
+    bg.addColorStop(0,"#060612"); bg.addColorStop(.42,"#171044"); bg.addColorStop(1,"#02121b");
+  }else{
+    bg.addColorStop(0,"#02070e"); bg.addColorStop(.45,"#082c3c"); bg.addColorStop(1,"#070319");
+  }
   ctx.fillStyle=bg; ctx.fillRect(0,0,1080,1080);
 
-  ctx.globalAlpha=.16;
-  ctx.strokeStyle="#80a3ff";
-  ctx.lineWidth=1;
+  // Dynamic light beams
+  ctx.save();
+  ctx.globalCompositeOperation="screen";
+  for(let i=0;i<7;i++){
+    const x=120+i*155;
+    const g=ctx.createLinearGradient(x,0,x+260,1080);
+    g.addColorStop(0,"rgba(109,137,255,0)");
+    g.addColorStop(.45,"rgba(109,137,255,.08)");
+    g.addColorStop(.6,"rgba(70,220,255,.14)");
+    g.addColorStop(1,"rgba(70,220,255,0)");
+    ctx.fillStyle=g;
+    ctx.beginPath();
+    ctx.moveTo(x,0);ctx.lineTo(x+75,0);ctx.lineTo(x+340,1080);ctx.lineTo(x+230,1080);ctx.closePath();ctx.fill();
+  }
+  ctx.restore();
+
+  // Grid
+  ctx.globalAlpha=.12; ctx.strokeStyle="#8ca8ff"; ctx.lineWidth=1;
   for(let x=0;x<=1080;x+=54){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,1080);ctx.stroke()}
   for(let y=0;y<=1080;y+=54){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(1080,y);ctx.stroke()}
   ctx.globalAlpha=1;
 
-  const glow=ctx.createRadialGradient(820,225,10,820,225,390);
-  glow.addColorStop(0,"rgba(113,145,255,.65)");
-  glow.addColorStop(.45,"rgba(96,80,255,.23)");
-  glow.addColorStop(1,"rgba(0,0,0,0)");
-  ctx.fillStyle=glow;ctx.fillRect(420,-170,660,720);
+  // AI orb / core
+  const cx=815, cy=300;
+  const orb=ctx.createRadialGradient(cx,cy,20,cx,cy,235);
+  orb.addColorStop(0,"rgba(255,255,255,.96)");
+  orb.addColorStop(.10,"rgba(116,181,255,.92)");
+  orb.addColorStop(.36,"rgba(89,93,255,.55)");
+  orb.addColorStop(.70,"rgba(51,216,255,.16)");
+  orb.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle=orb;ctx.beginPath();ctx.arc(cx,cy,235,0,Math.PI*2);ctx.fill();
 
-  const glow2=ctx.createRadialGradient(180,900,10,180,900,330);
-  glow2.addColorStop(0,"rgba(62,218,255,.28)");
-  glow2.addColorStop(1,"rgba(0,0,0,0)");
-  ctx.fillStyle=glow2;ctx.fillRect(-160,580,680,500);
-
-  ctx.strokeStyle="rgba(150,177,255,.8)";
-  ctx.lineWidth=3;
-  const nodes=[[770,190],[860,270],[720,330],[900,390],[800,470]];
+  ctx.strokeStyle="rgba(161,191,255,.85)";ctx.lineWidth=3;
+  for(let r of [86,126,170]){
+    ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke();
+  }
+  const nodes=[];
+  for(let i=0;i<10;i++){
+    const a=(Math.PI*2*i/10)+(level*.22);
+    const r=i%2?170:126;
+    nodes.push([cx+Math.cos(a)*r,cy+Math.sin(a)*r]);
+  }
+  ctx.strokeStyle="rgba(98,231,255,.7)";ctx.lineWidth=2;
   nodes.forEach(([x,y],i)=>{
-    if(i){ctx.beginPath();ctx.moveTo(nodes[i-1][0],nodes[i-1][1]);ctx.lineTo(x,y);ctx.stroke()}
-    ctx.beginPath();ctx.arc(x,y,10,0,Math.PI*2);ctx.fillStyle="#9bb3ff";ctx.fill();
+    const [x2,y2]=nodes[(i+3)%nodes.length];
+    ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x2,y2);ctx.stroke();
+    ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fillStyle="#b5d1ff";ctx.fill();
   });
+  ctx.fillStyle="#fff";ctx.font="900 86px system-ui,sans-serif";ctx.textAlign="center";ctx.fillText("AI",cx,330);ctx.textAlign="left";
 
-  ctx.fillStyle="#9bb3ff";
-  ctx.font="700 28px system-ui, sans-serif";
-  ctx.letterSpacing="5px";
-  ctx.fillText("TAZERIS",72,105);
+  // Brand badge
+  roundRect(ctx,70,70,250,54,27);ctx.fillStyle="rgba(113,145,255,.14)";ctx.fill();
+  ctx.strokeStyle="rgba(142,174,255,.55)";ctx.lineWidth=2;ctx.stroke();
+  ctx.fillStyle="#b7c7ff";ctx.font="800 22px system-ui,sans-serif";ctx.fillText("MULTI-AI ENGINE",96,104);
 
-  ctx.fillStyle="#ffffff";
-  ctx.font="900 122px system-ui, sans-serif";
-  ctx.fillText("TAZERIS",68,330);
-  const aiGrad=ctx.createLinearGradient(68,350,430,470);
-  aiGrad.addColorStop(0,"#80a3ff");aiGrad.addColorStop(1,"#55e3ff");
-  ctx.fillStyle=aiGrad;
-  ctx.fillText("AI",68,458);
+  ctx.fillStyle="#fff";ctx.font="900 118px system-ui,sans-serif";ctx.fillText("TAZERIS",68,310);
+  const aiGrad=ctx.createLinearGradient(68,330,430,455);
+  aiGrad.addColorStop(0,"#8cadff");aiGrad.addColorStop(.55,"#5f7cff");aiGrad.addColorStop(1,"#51e8ff");
+  ctx.fillStyle=aiGrad;ctx.fillText("AI",68,435);
 
-  ctx.fillStyle="#d9e2f7";
-  ctx.font="700 42px system-ui, sans-serif";
-  ctx.fillText("VIENAS PROTAS. DAUGIAU GALIOS.",72,565);
+  ctx.fillStyle="#e4e9f7";ctx.font="800 38px system-ui,sans-serif";
+  ctx.fillText(level>1?"DAUGIAU GALIOS. MAŽIAU RIBŲ.":"VIENAS PROTAS. DAUGIAU GALIOS.",72,555);
 
-  ctx.fillStyle="#9daac1";
-  ctx.font="400 30px system-ui, sans-serif";
-  ctx.fillText("Klausimai • kodas • idėjos • kūryba",72,625);
+  ctx.fillStyle="#a4b0c9";ctx.font="500 28px system-ui,sans-serif";
+  ctx.fillText("Klausimai • kodas • idėjos • kūryba",72,615);
 
-  roundRect(ctx,72,720,650,100,50);
-  const pill=ctx.createLinearGradient(72,720,722,820);
-  pill.addColorStop(0,"#6f91ff");pill.addColorStop(1,"#5567ff");
+  roundRect(ctx,72,710,600,104,52);
+  const pill=ctx.createLinearGradient(72,710,672,814);
+  pill.addColorStop(0,level%2?"#698cff":"#805dff");pill.addColorStop(1,level%2?"#5363ff":"#35cfea");
   ctx.fillStyle=pill;ctx.fill();
-  ctx.fillStyle="#fff";ctx.font="800 33px system-ui, sans-serif";
-  ctx.fillText("KLAUSK. KURK. DARYK.",112,783);
+  ctx.shadowColor="rgba(94,120,255,.55)";ctx.shadowBlur=28;ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.fillStyle="#fff";ctx.font="900 31px system-ui,sans-serif";ctx.fillText("KLAUSK. KURK. DARYK.",112,773);
 
-  ctx.fillStyle="rgba(255,255,255,.58)";
-  ctx.font="500 22px system-ui, sans-serif";
-  ctx.fillText("TAZERIS AI • TEST VERSION",72,1000);
+  // Bottom microcopy + accent line
+  const line=ctx.createLinearGradient(72,0,760,0);line.addColorStop(0,"#6d91ff");line.addColorStop(1,"rgba(109,145,255,0)");
+  ctx.fillStyle=line;ctx.fillRect(72,900,690,3);
+  ctx.fillStyle="rgba(255,255,255,.62)";ctx.font="600 21px system-ui,sans-serif";
+  ctx.fillText("TAZERIS AI  •  TEST VERSION  •  0 €",72,948);
+  ctx.fillStyle="rgba(255,255,255,.36)";ctx.font="500 18px system-ui,sans-serif";
+  ctx.fillText("ONE INTERFACE. MULTIPLE INTELLIGENCES.",72,987);
 
   const wrap=document.createElement("div");
   wrap.className="imageWrap";
@@ -328,18 +395,21 @@ function localTazerisPromo(q){
   img.alt=q;
   img.src=canvas.toDataURL("image/png");
   wrap.appendChild(img);
+
   const m=document.createElement("div");
   m.className="meta";
-  m.textContent="TAZERIS AI · reklaminis vizualas · be GPU limito";
+  m.textContent="TAZERIS AI · reklaminis vizualas v"+level+" · be GPU limito";
   wrap.appendChild(m);
   chat.appendChild(wrap);
+  lastArtifact="tazeris-promo";
   window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"});
 }
 
 async function answerImage(q){
   if(isTazerisPromo(q)){
     busy(true,"Kuriamas TAZERIS reklaminis vizualas…");
-    localTazerisPromo(q);
+    promoLevel=Math.max(1,promoLevel);
+    localTazerisPromo(q,promoLevel);
     return;
   }
 
@@ -392,7 +462,11 @@ async function run(){
   addText(q,"user");
   busy(true);
   try{
-    if(mode.value==="image"||(mode.value==="auto"&&wantsImage(q))){
+    if(mode.value==="auto"&&isVisualRefinement(q)){
+      promoLevel++;
+      busy(true,"Kuriama įspūdingesnė versija…");
+      localTazerisPromo(q,promoLevel);
+    }else if(mode.value==="image"||(mode.value==="auto"&&wantsImage(q))){
       await answerImage(q);
     }else{
       await answerText(q);
