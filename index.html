@@ -151,6 +151,15 @@ async function chooseEndpoint(client,candidates){
   return candidates[0];
 }
 
+async function imageClient(){
+  if(!imageClientPromise){
+    imageClientPromise=Client.connect("black-forest-labs/FLUX.1-schnell");
+  }
+  const c=await imageClientPromise;
+  if(!imageEndpoint) imageEndpoint=await chooseEndpoint(c,["/infer"]);
+  return c;
+}
+
 async function getLocalGenerator(){
   if(localGeneratorPromise) return localGeneratorPromise;
 
