@@ -14,9 +14,11 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("akhaliq/Qwen3-VL-4B-Instruct", html)
         self.assertIn("black-forest-labs/FLUX.1-schnell", html)
         self.assertIn('value="image"', html)
-        self.assertIn("randomize_seed:true", html)
-        self.assertIn("width:1024", html)
-        self.assertIn("height:1024", html)
+        self.assertIn("foto|fotograf", html)
+        self.assertIn("client.predict(imageEndpoint,[", html)
+        self.assertIn("englishPrompt,", html)
+        self.assertIn("1024,", html)
+        self.assertIn("SAVO gebėjimą", html)
 
 if __name__ == "__main__":
     unittest.main()
