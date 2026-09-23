@@ -92,7 +92,7 @@ function errText(e){
 }
 
 function wantsImage(q){
-  return /\b(sukurk|sugeneruok|nupiešk|padaryk|create|generate|draw)\b[\s\S]{0,90}\b(nuotrauk|paveiksl|vaizd|iliustr|image|photo|picture)\w*/i.test(q);
+  return /\b(sukurk|sugeneruok|nupiešk|padaryk|create|generate|draw)\b[\s\S]{0,120}\b(nuotrauk|foto|fotograf|paveiksl|vaizd|iliustr|image|photo|picture)\w*/i.test(q);
 }
 
 function contentText(c){
@@ -142,6 +142,7 @@ async function runTextRequest(userText,history=[]){
   const client=await textClient();
   const prepared=
     "Atsakyk LIETUVIŠKAI. Būk tikslus, konkretus ir praktiškas. "+
+    "Jei vartotojas klausia, ar tu moki / gali ką nors padaryti, atsakyk apie SAVO gebėjimą tai atlikti, o ne aiškink, kaip vartotojui to mokytis. "+
     "Jei klausimas apie programavimą, pateik teisingą sprendimą ir kodą. "+
     "Jei kažko tikrai nežinai, aiškiai tai pasakyk. Neprikurk faktų.\n\n"+
     "Vartotojo klausimas:\n"+userText;
@@ -217,14 +218,14 @@ async function answerImage(q){
   busy(true,"Kuriama nuotrauka…");
 
   const client=await imageClient();
-  const result=await client.predict(imageEndpoint,{
-    prompt:englishPrompt,
-    seed:0,
-    randomize_seed:true,
-    width:1024,
-    height:1024,
-    num_inference_steps:4
-  });
+  const result=await client.predict(imageEndpoint,[
+    englishPrompt,
+    0,
+    true,
+    1024,
+    1024,
+    4
+  ]);
 
   const file=result?.data?.[0];
   const urls=fileUrls(file);
