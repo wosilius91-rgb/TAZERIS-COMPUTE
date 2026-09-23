@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="lt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090b10">
+<meta name="robots" content="noindex,nofollow">
+<title>TAZERIS AI</title>
+<style>
+:root{--bg:#090b10;--card:#141923;--line:#293140;--txt:#f5f7fb;--muted:#99a4b4;--accent:#7697ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.app{max-width:780px;margin:auto;min-height:100vh;padding:14px 12px 120px}.top{display:flex;justify-content:space-between;align-items:center;margin:5px 2px 14px}
+.brand{font-size:21px;font-weight:900}.state{font-size:12px;color:#cfe1ff;border:1px solid #33425f;border-radius:999px;padding:5px 9px}
+select{width:100%;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:13px;padding:12px;margin-bottom:10px}
+.hint{font-size:12px;color:var(--muted);margin:0 2px 12px}.progress{display:none;background:#10151e;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:12px}
+.chat{display:flex;flex-direction:column;gap:10px}.msg{border-radius:17px;padding:13px 14px;white-space:pre-wrap;word-break:break-word}
+.user{background:#26355c;margin-left:10%}.bot{background:var(--card);border:1px solid var(--line);margin-right:3%}.meta{font-size:11px;color:var(--muted);margin-top:7px}
+.imageWrap{background:var(--card);border:1px solid var(--line);border-radius:17px;padding:10px}.imageWrap img{display:block;width:100%;height:auto;border-radius:12px}
+.composer{position:fixed;left:0;right:0;bottom:0;padding:20px 12px 12px;background:linear-gradient(180deg,#090b1000,#090b10 22%)}
+.composerIn{max-width:780px;margin:auto;display:flex;gap:8px;align-items:flex-end}textarea{flex:1;min-height:54px;max-height:160px;resize:none;background:#111720;color:var(--txt);border:1px solid var(--line);border-radius:15px;padding:14px}
+button{border:0;border-radius:14px;padding:15px 18px;background:var(--accent);color:white;font-weight:850;font-size:15px}button:disabled{opacity:.55}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top"><div class="brand">TAZERIS AI</div><div class="state" id="state">Paruošta</div></div>
+  <select id="mode"><option value="auto" selected>AUTO</option><option value="text">Klausimas / tekstas</option><option value="image">Nuotrauka</option></select>
+  <div class="hint">Be registracijos, SMS ir API raktų. Teksto AI veikia tavo telefone.</div>
+  <div class="progress" id="progress"></div>
+  <div class="chat" id="chat"><div class="msg bot">Rašyk, ko reikia. Pirmą kartą uždavus tekstinį klausimą AI modelis bus atsisiųstas į telefoną ir vėliau naudojamas iš naršyklės talpyklos.<div class="meta">TAZERIS AI</div></div></div>
+</div>
+<div class="composer"><div class="composerIn"><textarea id="prompt" placeholder="Rašyk čia…"></textarea><button id="send">Siųsti</button></div></div>
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm";
+env.allowLocalModels=false; env.useBrowserCache=true;
+const $=id=>document.getElementById(id),chat=$("chat"),box=$("prompt"),send=$("send"),mode=$("mode"),state=$("state"),progress=$("progress");
+let generatorPromise=null;
+function addText(text,kind="bot",meta=""){const d=document.createElement("div");d.className="msg "+kind;d.textContent=text;if(meta){const m=document.createElement("div");m.className="meta";m.textContent=meta;d.appendChild(m)}chat.appendChild(d);window.scrollTo({top:document.body.scrollHeight,behavior:"smooth"});return d}
+function busy(v,label="Dirba…"){send.disabled=v;send.textContent=v?"…":"Siųsti";state.textContent=v?label:"Paruošta"}
+function showProgress(t){progress.style.display="block";progress.textContent=t} function hideProgress(){progress.style.display="none"}
+function wantsImage(q){return /\b(sukurk|sugeneruok|nupiešk|padaryk|create|generate|draw)\b[\s\S]{0,80}\b(nuotrauk|paveiksl|vaizd|image|photo|picture|illustration)\w*/i.test(q)}
+async function getGenerator(){
+ if(generatorPromise)return generatorPromise;
+ generatorPromise=(async()=>{
+  const hasWebGPU=!!navigator.gpu;
+  showProgress(hasWebGPU?"Pirmą kartą kraunamas AI modelis į telefoną…":"Kraunamas AI modelis suderinamu telefono režimu…");
+  const opts={dtype:"q4",progress_callback:p=>{if(typeof p?.progress==="number")showProgress("AI modelis kraunamas: "+Math.round(p.progress*100)+"%")}};
+  if(hasWebGPU)opts.device="webgpu";
+  try{return await pipeline("text-generation","onnx-community/Qwen2.5-0.5B-Instruct",opts)}
+  catch(e){if(!hasWebGPU)throw e;showProgress("GPU režimas nepavyko. Bandau suderinamą režimą…");return await pipeline("text-generation","onnx-community/Qwen2.5-0.5B-Instruct",{dtype:"q4",progress_callback:p=>{if(typeof p?.progress==="number")showProgress("AI modelis kraunamas: "+Math.round(p.progress*100)+"%")}})}
+ })();
+ try{const g=await generatorPromise;hideProgress();return g}catch(e){generatorPromise=null;hideProgress();throw e}
+}
+async function answerText(q){
+ busy(true,"AI kraunamas…");const g=await getGenerator();busy(true,"Galvoju…");
+ const messages=[{role:"system",content:"Atsakyk lietuviškai. Būk tikslus, konkretus ir praktiškas. Jei nežinai, aiškiai pasakyk."},{role:"user",content:q}];
+ const out=await g(messages,{max_new_tokens:220,do_sample:true,temperature:.55,top_p:.9});
+ const gen=out?.[0]?.generated_text;let text="";
+ if(Array.isArray(gen))text=gen.at(-1)?.content||"";else text=String(gen||"");
+ if(!text)throw new Error("AI negrąžino atsakymo.");
+ addText(text,"bot","TAZERIS AI · vietinis modelis");
+}
+async function answerImage(q){
+ busy(true,"Kuriama nuotrauka…");
+ const wrap=document.createElement("div");wrap.className="imageWrap";const img=document.createElement("img");img.alt=q;
+ const url="https://image.pollinations.ai/prompt/"+encodeURIComponent(q)+"?width=768&height=768&model=flux&nologo=true&seed="+Date.now();
+ await new Promise((res,rej)=>{const timer=setTimeout(()=>rej(new Error("Nuotraukos generatorius neatsakė laiku.")),60000);img.onload=()=>{clearTimeout(timer);res()};img.onerror=()=>{clearTimeout(timer);rej(new Error("Nemokamas nuotraukų generatorius šiuo metu nepasiekiamas."))};img.src=url});
+ wrap.appendChild(img);const m=document.createElement("div");m.className="meta";m.textContent="TAZERIS AI · nuotrauka";wrap.appendChild(m);chat.appendChild(wrap);
+}
+async function run(){const q=box.value.trim();if(!q||send.disabled)return;box.value="";addText(q,"user");busy(true);try{if(mode.value==="image"||(mode.value==="auto"&&wantsImage(q)))await answerImage(q);else await answerText(q)}catch(e){addText("Nepavyko: "+(e?.message||String(e)),"bot","Klaida")}finally{busy(false);box.focus()}}
+send.onclick=run;box.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();run()}});
+</script>
+</body></html>
