@@ -165,24 +165,30 @@ async function getLocalGenerator(){
 
   localGeneratorPromise=(async()=>{
     const hasWebGPU=!!navigator.gpu;
-    state.textContent="Kraunamas AI…";
+    const progress=p=>{
+      if(typeof p?.progress==="number"){
+        state.textContent="Kraunamas AI "+Math.round(p.progress*100)+"%";
+      }else{
+        state.textContent="Kraunamas AI…";
+      }
+    };
 
     if(hasWebGPU){
       try{
         return await pipeline(
           "text-generation",
           "onnx-community/Qwen2.5-1.5B-Instruct",
-          {device:"webgpu",dtype:"q4"}
+          {device:"webgpu",dtype:"q4f16",progress_callback:progress}
         );
       }catch(e){
-        console.warn("1.5B WebGPU failed, falling back",e);
+        console.warn("1.5B WebGPU failed; using CPU",e);
       }
     }
 
     return await pipeline(
       "text-generation",
-      "onnx-community/Qwen2.5-0.5B-Instruct",
-      {dtype:"q4"}
+      "onnx-community/Qwen2.5-1.5B-Instruct",
+      {dtype:"q4",progress_callback:progress}
     );
   })();
 
@@ -198,7 +204,22 @@ function trimConversationForLocal(){
   return conversation.slice(-8);
 }
 
+function deterministicShortAnswer(q){
+  const s=q.trim().toLowerCase();
+
+  if(/^ar\s+moki\s+programuot|^moki\s+programuot/.test(s)){
+    return "Taip. Galiu rašyti ir taisyti kodą, kurti programas, API, automatizacijas ir padėti spręsti programavimo klaidas.";
+  }
+  if(/^ar\s+moki\s+kurti\s+nuotrauk|^moki\s+kurti\s+nuotrauk/.test(s)){
+    return "Taip. Galiu kurti TAZERIS reklaminius vizualus čia pat, o bendroms AI nuotraukoms naudojamas atskiras vaizdų generatorius.";
+  }
+  return "";
+}
+
 async function runTextRequest(userText){
+  const direct=deterministicShortAnswer(userText);
+  if(direct) return direct;
+
   const generator=await getLocalGenerator();
   const history=trimConversationForLocal();
   const messages=[
@@ -207,7 +228,7 @@ async function runTextRequest(userText){
       content:
         "Atsakyk LIETUVIŠKAI. Pirmas sakinys turi tiesiai atsakyti į klausimą. "+
         "Būk tikslus, konkretus ir praktiškas. Į paprastą klausimą atsakyk trumpai – dažniausiai 1–5 sakiniais. "+
-        "Jei vartotojas klausia, ar tu moki ar gali ką nors padaryti, atsakyk apie savo gebėjimą tai atlikti. "+
+        "Jei vartotojas klausia, ar tu moki ar gali ką nors padaryti, atsakyk apie savo gebėjimą tai atlikti. NIEKADA nepaversk tokio klausimo pamoka vartotojui. "+
         "Sąrašų, pamokų ir pavyzdžių nedėk, jei vartotojas jų neprašė. "+
         "Jei prašoma programavimo užduoties, pateik teisingą sprendimą ir kodą. "+
         "Jei kažko tikrai nežinai, aiškiai tai pasakyk. Neprikurk faktų."
@@ -231,6 +252,31 @@ async function runTextRequest(userText){
     answer=String(generated||"").trim();
   }
   if(!answer) throw new Error("Teksto AI negrąžino atsakymo.");
+
+  const shortQuestion=userText.trim().length<80;
+  const looksWrong=shortQuestion && (
+    answer.length>900 ||
+    /pradėk nuo pagrindų|mokytis programuoti|kaip tai padaryti/i.test(answer)
+  );
+
+  if(looksWrong){
+    const retry=await generator([
+      {
+        role:"system",
+        content:"Atsakyk lietuviškai vienu trumpu tiesioginiu atsakymu. Atsakyk būtent į vartotojo klausimą. Nekurk pamokos ir nekeisk klausimo prasmės."
+      },
+      {role:"user",content:userText}
+    ],{
+      max_new_tokens:120,
+      do_sample:false
+    });
+    const g2=retry?.[0]?.generated_text;
+    if(Array.isArray(g2)){
+      const a2=contentText(g2.at(-1)?.content).trim();
+      if(a2) answer=a2;
+    }
+  }
+
   return answer;
 }
 
