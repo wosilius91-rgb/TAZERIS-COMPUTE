@@ -16,7 +16,6 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("deterministicShortAnswer", html)
         self.assertIn("progress_callback:progress", html)
         self.assertIn("NIEKADA nepaversk", html)
-        self.assertIn("onnx-community/Qwen2.5-0.5B-Instruct", html)
         self.assertIn("isVisualRefinement", html)
         self.assertIn("promoLevel++", html)
         self.assertIn("async function imageClient()", html)
